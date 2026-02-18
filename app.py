@@ -10,12 +10,16 @@ st.title("🎰 Mark Six Analyzer")
 def load_data():
     df = pd.read_csv('marksix.csv')
     
-    # 🔧 修日期：轉成 datetime 正確排序
+    # 修日期格式
     df['date_parsed'] = pd.to_datetime(df['date'], format='%d/%m/%Y', errors='coerce')
     df = df.sort_values('date_parsed').reset_index(drop=True)
     
-    st.write(f"✅ Fixed: {df['date'].min()} → {df['date'].max()} ({len(df)} draws)")
+    # Debug
+    st.sidebar.write(f"📅 Range: {df['date'].iloc[0]} → {df['date'].iloc[-1]}")
+    st.sidebar.write(f"📊 {len(df)} total draws")
+    
     return df
+
 
 
 
