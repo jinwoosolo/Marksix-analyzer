@@ -54,54 +54,54 @@ with tab4:
     st.header("🧠 AI Prophet Forecast")
     
     if st.button("🚀 Train Model", type="primary"):
-        with st.spinner("Training on 22 years data..."):
+        with st.spinner("Training 22 years data..."):
             # 準備數據
             df_prophet = df.copy()
             df_prophet['ds'] = pd.to_datetime(df_prophet['date'], format='%d/%m/%Y')
-            df_prophet['y'] = df_prophet[[f'n{i}'] for i in range(1,7)].sum(axis=1)
+            
+            # ✅ 修正：獨立 list
+            num_cols = [f'n{i}' for i in range(1,7)]
+            df_prophet['y'] = df_prophet[num_cols].sum(axis=1)
+            
             df_prophet = df_prophet[['ds', 'y']].dropna()
             
-            # Prophet 模型
-            m = Prophet(
-                yearly_seasonality=True,
-                weekly_seasonality=True,
-                changepoint_prior_scale=0.05
-            )
+            # Prophet
+            m = Prophet(weekly_seasonality=True, yearly_seasonality=True)
             m.fit(df_prophet)
             
-            # 預測未來 10 期
+            # 預測
             future = m.make_future_dataframe(periods=10, freq='3D')
             forecast = m.predict(future)
             
-            # ✅ 安全 Plotly 圖
+            # Plot
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat'],
-                                   mode='lines', name='Forecast'))
-            fig.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat_lower'],
+            fig.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat'], 
+                                   mode='lines', name='Prediction'))
+            fig.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat_lower'], 
                                    mode='lines', fill='tonexty', name='Lower'))
-            fig.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat_upper'],
-                                   mode='lines', fill='tonexty', name='Upper', showlegend=False))
-            fig.update_layout(title="Next 10 Draws Sum Prediction", xaxis_title="Date", yaxis_title="Number Sum")
+            fig.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat_upper'], 
+                                   mode='lines', fill='tonexty', name='Upper'))
+            fig.update_layout(title="Next 10 Draws Prediction", 
+                            xaxis_title="Date", yaxis_title="Sum")
             
             st.plotly_chart(fig, use_container_width=True)
             
-            # 下期預測號碼
-            next_sum = forecast['yhat'].iloc[-1]
-            recent_hot = Counter(pd.concat([df.tail(52)[f'n{i}'] for i in range(1,7)])).most_common(3)
+            # AI 號碼
+            recent_hot = Counter(pd.concat([df.tail(52)[col] for col in num_cols])).most_common(3)
             ai_pick = [x[0] for x in recent_hot]
+            next_sum = forecast['yhat'].iloc[-1]
             
             st.markdown(f"""
-            <div style='text-align:center; padding:20px; background:#FF6B35; color:white; border-radius:10px;'>
+            <div style='text-align:center; padding:30px; background:linear-gradient(45deg,#FF6B35,#F7931E); 
+                        color:white; border-radius:15px; box-shadow:0 4px 15px rgba(0,0,0,0.2);'>
                 <h2>🎯 AI Prediction</h2>
-                <h1>{ai_pick[0]} {ai_pick[1]} {ai_pick[2]} 28 35 42</h1>
-                <p>Expected sum: ~{next_sum:.0f}</p>
+                <h1 style='font-size:3em;'>{ai_pick[0]} {ai_pick[1]} {ai_pick[2]} 28 35 42</h1>
+                <p>Expected sum: <strong>~{next_sum:.0f}</strong></p>
             </div>
             """, unsafe_allow_html=True)
 
-    # Quick pick（唔使 train）
-    st.subheader("⚡ Instant AI Pick")
-    recent_all = []
-    for _, row in df.tail(52).iterrows():
-        recent_all.extend([row[f'n{i}'] for i in range(1,7)])
-    quick_pick = Counter(recent_all).most_common(6)
-    st.success(f"**Quick: {' '.join(str(x[0]) for x in quick_pick[:6])}**")
+    st.subheader("⚡ Quick Pick")
+    num_cols = [f'n{i}' for i in range(1,7)]
+    recent_all = pd.concat([df.tail(52)[col] for col in num_cols])
+    quick = Counter(recent_all).most_common(6)
+    st.success(f"**Quick: {' '.join(str(x[0]) for x in quick[:6])}**")
