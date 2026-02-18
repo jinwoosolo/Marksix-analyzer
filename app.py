@@ -9,13 +9,17 @@ st.title("🎰 Mark Six Analyzer")
 @st.cache_data(ttl=3600)
 def load_data():
     df = pd.read_csv('marksix.csv')
-    # 安全檢查欄位
-    required = ['date', 'n1', 'n2', 'n3', 'n4', 'n5', 'n6']
-    missing = [col for col in required if col not in df.columns]
-    if missing:
-        st.error(f"❌ Missing columns: {missing}")
-        st.stop()
+    
+    # 修日期格式
+    df['date_parsed'] = pd.to_datetime(df['date'], format='%d/%m/%Y', errors='coerce')
+    df = df.sort_values('date_parsed').reset_index(drop=True)
+    
+    # Debug
+    st.sidebar.write(f"📅 Range: {df['date'].iloc[0]} → {df['date'].iloc[-1]}")
+    st.sidebar.write(f"📊 {len(df)} total draws")
+    
     return df
+
 
 df = load_data()
 st.write("### 🔍 Data Debug")
