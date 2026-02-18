@@ -8,7 +8,7 @@ st.title("🎰 Mark Six Analyzer")
 
 @st.cache_data(ttl=3600)
 def load_data():
-    df = pd.read_csv('marksix_49ball_full_2002_2026.csv')
+    df = pd.read_csv('marksix.csv')
     # 安全檢查欄位
     required = ['date', 'n1', 'n2', 'n3', 'n4', 'n5', 'n6']
     missing = [col for col in required if col not in df.columns]
