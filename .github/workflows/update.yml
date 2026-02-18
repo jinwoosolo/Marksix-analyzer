@@ -1,0 +1,17 @@
+name: Daily Mark Six Update
+on:
+  schedule:
+    - cron: '0 3 * * 2,4,6'  # Tue/Thu/Sat 3AM
+  workflow_dispatch:
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v4
+      with: {python-version: '3.11'}
+    - run: pip install requests beautifulsoup4 pandas
+    - run: python scraper.py
+    - run: git add .
+    - run: git diff --staged --quiet || git commit -m "Update $(date)"
+    - run: git push
