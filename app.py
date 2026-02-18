@@ -18,6 +18,15 @@ def load_data():
     return df
 
 df = load_data()
+st.write("### 🔍 Data Debug")
+st.write(f"Date range: **{df['date'].min()} → {df['date'].max()}**")
+st.write(f"Total draws: **{len(df):,d}**")
+st.write(f"2026 draws: **{len(df[df['date'].str.contains('2026', na=False)]):,d}**")
+
+st.success(f"✅ Loaded | Latest known: {df['date'].max()}")
+
+
+
 st.success(f"✅ Loaded {len(df)} draws | Latest: {df['date'].max()}")
 
 # === Metrics（安全版）===
