@@ -9,7 +9,7 @@ st.set_page_config(page_title="Mark Six Analyzer", layout="wide")
 
 @st.cache_data(ttl=3600)  # Cache 1小時
 def load_data():
-    return pd.read_csv('data/marksix.csv')
+    return pd.read_csv('marksix_49ball_full_2002_2026.csv')
 
 df = load_data()
 st.title("🎰 Mark Six Analyzer - Auto Updated")
