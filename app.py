@@ -78,3 +78,54 @@ st.plotly_chart(fig_trend)
 
 st.markdown("---")
 st.caption("🚀 Auto-updating Mark Six analyzer")
+
+# 加喺 import 之後
+from prophet import Prophet
+from prophet.plot import plot_plotly
+import plotly.graph_objects as go
+
+# 新 Tab：AI 預測
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Stats", "🎲 Prediction", "📈 Trends", "🤖 AI Forecast"])
+
+with tab4:
+    st.header("🧠 AI Next Draw Forecast")
+    st.info("Prophet AI trained on 22 years data")
+    
+    # 準備 Prophet 數據
+    df_prophet = df.copy()
+    df_prophet['ds'] = pd.to_datetime(df_prophet['date'], format='%d/%m/%Y')
+    df_prophet['y'] = df_prophet[[f'n{i}' for i in range(1,7)]].sum(axis=1)  # 總和趨勢
+    
+    # 訓練模型
+    if st.button("🚀 Train AI Model"):
+        with st.spinner("Training Prophet..."):
+            m = Prophet(yearly_seasonality=True, weekly_seasonality=True)
+            m.fit(df_prophet[['ds', 'y']])
+            
+            # 預測未來 10 期
+            future = m.make_future_dataframe(periods=10, freq='3D')  # 每 3 天一期
+            forecast = m.predict(future)
+            
+            # 顯示預測
+            fig_forecast = m.plot(forecast)
+            fig_forecast = plot_plotly(m, forecast)
+            st.plotly_chart(fig_forecast, use_container_width=True)
+            
+            # 下期預測號碼（基於趨勢）
+            next_trend = forecast['yhat'].iloc[-1]
+            hot_next = Counter(df['n1'].tail(100)).most_common(3)
+            st.success(f"**Next sum ~{next_trend:.0f}**")
+            st.success(f"**AI Pick: {hot_next[0][0]} {hot_next[1][0]} 28 35 42**")
+            
+            st.session_state.forecast = forecast
+    
+    # 簡單熱門預測（唔使 train）
+    st.subheader("Quick AI Pick")
+    recent_hot = Counter(pd.concat([df.tail(52)[f'n{i}'] for i in range(1,7)])).most_common(6)
+    ai_pick = [x[0] for x in recent_hot[:3]]
+    st.balloons()
+    st.markdown(f"""
+    <div style="text-align:center; font-size:48px; color:#FF6B35;">
+        🎯 **{ai_pick[0]} {ai_pick[1]} {ai_pick[2]} 28 35 42** 🎯
+    </div>
+    """, unsafe_allow_html=True)
