@@ -1,107 +1,137 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from collections import Counter
-from prophet import Prophet
 import plotly.graph_objects as go
+from prophet import Prophet
+from collections import Counter
+import datetime
 
-st.set_page_config(layout="wide")
-st.title("🎰 Mark Six AI Analyzer")
+# --- CONFIGURATION ---
+st.set_page_config(page_title="Mark Six Pro AI", page_icon="🎰", layout="wide")
+
+# Custom Professional CSS
+st.markdown("""
+    <style>
+    .main { background-color: #0e1117; }
+    div.stButton > button:first-child {
+        background: linear-gradient(45deg, #FF6B35, #FF8C5A);
+        color: white; border: none; border-radius: 10px; width: 100%;
+    }
+    .metric-card {
+        background: rgba(255, 255, 255, 0.05);
+        padding: 20px; border-radius: 15px; border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .stat-val { color: #FF6B35; font-size: 24px; font-weight: bold; }
+    </style>
+    """, unsafe_allow_html=True)
 
 @st.cache_data(ttl=3600)
 def load_data():
     df = pd.read_csv('marksix.csv')
-    df['date_parsed'] = pd.to_datetime(df['date'], format='%d/%m/%Y', errors='coerce')
-    df = df.sort_values('date_parsed').reset_index(drop=True)
-    return df
+    df['date_parsed'] = pd.to_datetime(df['date'], format='%d/%m/%Y', dayfirst=True)
+    return df.sort_values('date_parsed', ascending=False)
 
-df = load_data()
-st.sidebar.success(f"📅 {df['date'].iloc[0]} → {df['date'].iloc[-1]} | {len(df):,} draws")
+try:
+    df = load_data()
+    num_cols = ['n1', 'n2', 'n3', 'n4', 'n5', 'n6']
+except Exception as e:
+    st.error(f"Error loading data: {e}")
+    st.stop()
 
-# Metrics
-col1, col2 = st.columns(2)
-latest = df.iloc[-1]
-col1.metric("Latest", latest['date'])
-col2.metric("Numbers", f"{latest['n1']}-{latest['n2']}-{latest['n3']}-{latest['n4']}-{latest['n5']}-{latest['n6']}")
+# --- SIDEBAR & HEADER ---
+with st.sidebar:
+    st.image("https://www.flaticon.com/free-icons/lottery", width=100) # Optional placeholder
+    st.title("Control Panel")
+    analysis_range = st.slider("Analysis Window (Draws)", 10, 500, 100)
+    st.info(f"Analyzing data from {df['date'].iloc[-1]} to {df['date'].iloc[0]}")
 
-# Tabs
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Hot Numbers", "🎯 Quick Pick", "📈 Trends", "🤖 AI Prophet"])
+st.title("🎰 Mark Six AI Analyzer")
+st.markdown("---")
 
-with tab1:
-    recent = df.tail(52)
-    all_nums = []
-    for _, row in recent.iterrows():
-        all_nums.extend([row[f'n{i}'] for i in range(1,7)])
+# --- TOP METRICS ---
+l_date = df.iloc[0]['date']
+l_nums = "-".join([str(int(df.iloc[0][n])) for n in num_cols])
+s_num = int(df.iloc[0]['extra'])
+
+m1, m2, m3 = st.columns(3)
+with m1:
+    st.markdown(f"<div class='metric-card'>Latest Draw Date<br><span class='stat-val'>{l_date}</span></div>", unsafe_allow_html=True)
+with m2:
+    st.markdown(f"<div class='metric-card'>Winning Numbers<br><span class='stat-val'>{l_nums}</span></div>", unsafe_allow_html=True)
+with m3:
+    st.markdown(f"<div class='metric-card'>Special Number<br><span class='stat-val' style='color:#7FD1B9'>{s_num}</span></div>", unsafe_allow_html=True)
+
+st.write("")
+
+# --- TABS ---
+tabs = st.tabs(["📊 Frequency Analysis", "📈 Predictive Trends", "🤖 AI Oracle"])
+
+with tabs[0]:
+    col_l, col_r = st.columns([2, 1])
     
-    hot = Counter(all_nums).most_common(10)
-    fig = px.bar(x=[f"{x[0]}" for x in hot], y=[x[1] for x in hot],
-                 color=[x[1] for x in hot])
-    st.plotly_chart(fig)
-
-with tab2:
-    st.header("🎲 AI Quick Pick")
-    pred = [hot[i][0] for i in range(3)]
-    st.markdown(f"""
-    <h2 style='text-align:center; color:#FF6B35;'>🎯 {pred[0]} {pred[1]} {pred[2]} 28 35 42 🎯</h2>
-    """, unsafe_allow_html=True)
-
-with tab3:
-    df['sum'] = df[[f'n{i}' for i in range(1,7)]].sum(axis=1)
-    fig_trend = px.line(df.tail(100), x='date_parsed', y='sum')
-    st.plotly_chart(fig_trend)
-
-with tab4:
-    st.header("🧠 AI Prophet Forecast")
+    # Calculate Frequency
+    recent_df = df.head(analysis_range)
+    all_draws = recent_df[num_cols].values.flatten()
+    counts = Counter(all_draws)
+    freq_df = pd.DataFrame(counts.items(), columns=['Number', 'Frequency']).sort_values('Frequency', ascending=False)
     
-    if st.button("🚀 Train Model", type="primary"):
-        with st.spinner("Training 22 years data..."):
-            # 準備數據
-            df_prophet = df.copy()
-            df_prophet['ds'] = pd.to_datetime(df_prophet['date'], format='%d/%m/%Y')
-            
-            # ✅ 修正：獨立 list
-            num_cols = [f'n{i}' for i in range(1,7)]
-            df_prophet['y'] = df_prophet[num_cols].sum(axis=1)
-            
-            df_prophet = df_prophet[['ds', 'y']].dropna()
-            
-            # Prophet
-            m = Prophet(weekly_seasonality=True, yearly_seasonality=True)
-            m.fit(df_prophet)
-            
-            # 預測
-            future = m.make_future_dataframe(periods=10, freq='3D')
-            forecast = m.predict(future)
-            
-            # Plot
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat'], 
-                                   mode='lines', name='Prediction'))
-            fig.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat_lower'], 
-                                   mode='lines', fill='tonexty', name='Lower'))
-            fig.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat_upper'], 
-                                   mode='lines', fill='tonexty', name='Upper'))
-            fig.update_layout(title="Next 10 Draws Prediction", 
-                            xaxis_title="Date", yaxis_title="Sum")
-            
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # AI 號碼
-            recent_hot = Counter(pd.concat([df.tail(52)[col] for col in num_cols])).most_common(3)
-            ai_pick = [x[0] for x in recent_hot]
-            next_sum = forecast['yhat'].iloc[-1]
-            
-            st.markdown(f"""
-            <div style='text-align:center; padding:30px; background:linear-gradient(45deg,#FF6B35,#F7931E); 
-                        color:white; border-radius:15px; box-shadow:0 4px 15px rgba(0,0,0,0.2);'>
-                <h2>🎯 AI Prediction</h2>
-                <h1 style='font-size:3em;'>{ai_pick[0]} {ai_pick[1]} {ai_pick[2]} 28 35 42</h1>
-                <p>Expected sum: <strong>~{next_sum:.0f}</strong></p>
-            </div>
-            """, unsafe_allow_html=True)
+    with col_l:
+        st.subheader("Number Distribution")
+        fig = px.bar(freq_df.head(20), x='Number', y='Frequency', 
+                     color='Frequency', color_continuous_scale='Oranges',
+                     template="plotly_dark")
+        st.plotly_chart(fig, use_container_width=True)
+        
+    with col_r:
+        st.subheader("🔥 Hot vs ❄️ Cold")
+        st.write("Top 5 Hot Numbers")
+        st.dataframe(freq_df.head(5), hide_index=True)
+        st.write("Top 5 Cold Numbers")
+        st.dataframe(freq_df.tail(5), hide_index=True)
 
-    st.subheader("⚡ Quick Pick")
-    num_cols = [f'n{i}' for i in range(1,7)]
-    recent_all = pd.concat([df.tail(52)[col] for col in num_cols])
-    quick = Counter(recent_all).most_common(6)
-    st.success(f"**Quick: {' '.join(str(x[0]) for x in quick[:6])}**")
+with tabs[1]:
+    st.subheader("Draw Sum Trend Analysis")
+    df['draw_sum'] = df[num_cols].sum(axis=1)
+    fig_line = px.line(df.head(100), x='date_parsed', y='draw_sum', 
+                      title="Sum of Numbers Over Time", template="plotly_dark")
+    fig_line.add_hline(y=150, line_dash="dash", line_color="red", annotation_text="High Average")
+    st.plotly_chart(fig_line, use_container_width=True)
+
+with tabs[2]:
+    st.header("Prophet Forecasting Engine")
+    if st.button("Generate AI Intelligence Report"):
+        with st.spinner("Crunching historical patterns..."):
+            # Prepare Prophet Data
+            p_df = df.rename(columns={'date_parsed': 'ds', 'draw_sum': 'y'})[['ds', 'y']]
+            model = Prophet(changepoint_prior_scale=0.05, daily_seasonality=False)
+            model.fit(p_df)
+            
+            future = model.make_future_dataframe(periods=5, freq='3D')
+            forecast = model.predict(future)
+            
+            # Smart Logic for AI Pick
+            hot_numbers = [int(x) for x in freq_df['Number'].head(4).tolist()]
+            cold_numbers = [int(x) for x in freq_df['Number'].tail(2).tolist()]
+            ai_suggestion = sorted(hot_numbers + cold_numbers)
+            
+            st.success("Analysis Complete")
+            
+            c1, c2 = st.columns([1, 1])
+            with c1:
+                # Gauge Chart for expected sum
+                expected_sum = forecast['yhat'].iloc[-1]
+                fig_gauge = go.Figure(go.Indicator(
+                    mode = "gauge+number", value = expected_sum,
+                    title = {'text': "Predicted Next Sum"},
+                    gauge = {'axis': {'range': [21, 279]}, 'bar': {'color': "#FF6B35"}}
+                ))
+                st.plotly_chart(fig_gauge, use_container_width=True)
+                
+            with c2:
+                st.markdown(f"""
+                <div style="background: #1e2130; padding: 40px; border-radius: 20px; text-align: center; border: 2px solid #FF6B35;">
+                    <h3 style="color: white;">AI Recommended Combination</h3>
+                    <h1 style="color: #FF6B35; letter-spacing: 5px;">{' '.join(map(str, ai_suggestion))}</h1>
+                    <p style="color: #888;">Based on 4 'Hot' and 2 'Cold' volatility factors</p>
+                </div>
+                """, unsafe_allow_html=True)
