@@ -18,10 +18,6 @@ st.markdown("""
         transition: all 0.3s ease;
     }
     div.stButton > button:hover { border-color: #FF6B35; color: #FF6B35; }
-    .selected-btn > div > button {
-        background: linear-gradient(45deg, #FF6B35, #FF8C5A) !important;
-        color: white !important; border: none !important;
-    }
     .metric-card {
         background: rgba(255, 255, 255, 0.05);
         padding: 20px; border-radius: 15px; border: 1px solid rgba(255, 255, 255, 0.1);
@@ -29,22 +25,58 @@ st.markdown("""
     }
     .stat-val { color: #FF6B35; font-size: 28px; font-weight: bold; }
     .stat-label { color: #888; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }
-    .prize-box { 
-        padding: 15px; border-radius: 10px; margin-bottom: 10px; border-left: 5px solid #FF6B35;
-        background: rgba(255, 107, 53, 0.1);
+    .favorite-card {
+        background: rgba(255, 255, 255, 0.03);
+        padding: 15px; border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.1);
+        margin-top: 10px;
     }
+    .win-highlight { color: #FF6B35; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- SESSION STATE FOR GRID ---
+# --- SESSION STATE ---
 if 'selected_nums' not in st.session_state:
     st.session_state.selected_nums = set()
+if 'fav_sets' not in st.session_state:
+    # Storage for up to 3 favorite sets
+    st.session_state.fav_sets = [None, None, None]
 
 @st.cache_data(ttl=3600)
 def load_data():
     df = pd.read_csv('marksix.csv')
     df['date_parsed'] = pd.to_datetime(df['date'], format='mixed')
     return df.sort_values('date_parsed', ascending=False).reset_index(drop=True)
+
+def calculate_prizes(user_set, data):
+    """Calculates all prizes for a given set across the dataset."""
+    results = []
+    for _, row in data.iterrows():
+        draw_set = {row['n1'], row['n2'], row['n3'], row['n4'], row['n5'], row['n6']}
+        extra_num = row['extra']
+        matched = user_set.intersection(draw_set)
+        match_count = len(matched)
+        has_extra = extra_num in user_set
+        
+        prize = ""
+        rank = 99 # To help with filtering
+        if match_count == 6: 
+            prize, rank = "1st Prize", 1
+        elif match_count == 5 and has_extra: 
+            prize, rank = "2nd Prize", 2
+        elif match_count == 5: 
+            prize, rank = "3rd Prize", 3
+        elif match_count == 4 and has_extra: 
+            prize, rank = "4th Prize", 4
+        elif match_count == 4: 
+            prize, rank = "5th Prize", 5
+        elif match_count == 3 and has_extra: 
+            prize, rank = "6th Prize", 6
+        elif match_count == 3: 
+            prize, rank = "7th Prize", 7
+            
+        if prize:
+            results.append({"Date": row['date'], "Prize": prize, "Rank": rank, "Match": match_count})
+    return results
 
 try:
     df = load_data()
@@ -74,8 +106,7 @@ with c2:
 with c3:
     st.markdown(f"<div class='metric-card'><span class='stat-label'>Special</span><br><span class='stat-val' style='color:#7FD1B9'>{int(latest['extra'])}</span></div>", unsafe_allow_html=True)
 
-# --- HISTORICAL PRIZE CHECKER (ABOVE TABS) ---
-# Header and Reset Button in columns
+# --- HISTORICAL PRIZE CHECKER ---
 header_col1, header_col2 = st.columns([5, 1])
 with header_col1:
     st.markdown("### 🔎 Historical Prize Checker")
@@ -84,7 +115,7 @@ with header_col2:
         st.session_state.selected_nums = set()
         st.rerun()
 
-st.write("Click numbers below to select your 6-number combination.")
+st.write("Click numbers to select your 6-number combination.")
 
 # Grid UI
 cols = st.columns(7)
@@ -92,7 +123,6 @@ for i in range(1, 50):
     with cols[(i-1) % 7]:
         is_selected = i in st.session_state.selected_nums
         btn_label = f"{i:02d}"
-        
         if st.button(btn_label, key=f"btn_{i}", use_container_width=True, 
                      type="primary" if is_selected else "secondary"):
             if i in st.session_state.selected_nums:
@@ -104,38 +134,63 @@ for i in range(1, 50):
 selected_list = sorted(list(st.session_state.selected_nums))
 st.markdown(f"**Selected:** `{', '.join(map(str, selected_list)) if selected_list else 'None'}` ({len(selected_list)}/6)")
 
+# --- SAVE FAVORITES SECTION ---
 if len(selected_list) == 6:
-    user_set = set(selected_list)
-    win_records = []
-    
-    for _, row in df.iterrows():
-        draw_set = {row['n1'], row['n2'], row['n3'], row['n4'], row['n5'], row['n6']}
-        extra_num = row['extra']
-        matched = user_set.intersection(draw_set)
-        match_count = len(matched)
-        has_extra = extra_num in user_set
-        
-        prize = ""
-        if match_count == 6: prize = "1st Prize"
-        elif match_count == 5 and has_extra: prize = "2nd Prize"
-        elif match_count == 5: prize = "3rd Prize"
-        elif match_count == 4 and has_extra: prize = "4th Prize"
-        elif match_count == 4: prize = "5th Prize"
-        elif match_count == 3 and has_extra: prize = "6th Prize"
-        elif match_count == 3: prize = "7th Prize"
-        
-        if prize:
-            win_records.append({"Date": row['date'], "Prize": prize, "Draw": f"{row['n1']}-{row['n2']}-{row['n3']}-{row['n4']}-{row['n5']}-{row['n6']} + ({row['extra']})"})
+    st.write("💾 **Save this set as favorite:**")
+    save_cols = st.columns(3)
+    for idx in range(3):
+        with save_cols[idx]:
+            if st.button(f"Save to Slot {idx+1}", key=f"save_{idx}", use_container_width=True):
+                st.session_state.fav_sets[idx] = selected_list
+                st.toast(f"Set {idx+1} saved!")
+                st.rerun()
 
-    if win_records:
-        st.success(f"🎉 These numbers have won **{len(win_records)}** times in history!")
-        st.dataframe(pd.DataFrame(win_records), use_container_width=True, hide_index=True)
+    # Results for currently selected set
+    results = calculate_prizes(set(selected_list), df)
+    if results:
+        st.success(f"🎉 Current selection has won **{len(results)}** times in history!")
+        st.dataframe(pd.DataFrame(results)[["Date", "Prize"]], use_container_width=True, hide_index=True)
     else:
-        st.info("No historical wins found for this combination.")
+        st.info("No historical wins found for this specific combination.")
 
 st.write("---")
 
-# --- ANALYSIS TABS (BELOW) ---
+# --- FAVORITE SETS TRACKER ---
+st.markdown("### ⭐ Favorite Sets Tracker")
+fav_cols = st.columns(3)
+for idx, fav in enumerate(st.session_state.fav_sets):
+    with fav_cols[idx]:
+        st.markdown(f"**Slot {idx+1}**")
+        if fav:
+            st.code(f"{' '.join(map(str, fav))}")
+            # Analyze favorite
+            fav_results = calculate_prizes(set(fav), df)
+            # High-tier prizes (Rank 1-4: 1st, 2nd, 3rd, 4th)
+            high_tier = [r for r in fav_results if r['Rank'] <= 4]
+            
+            # Check latest draw win
+            latest_draw_set = {latest['n1'], latest['n2'], latest['n3'], latest['n4'], latest['n5'], latest['n6']}
+            latest_match = len(set(fav).intersection(latest_draw_set))
+            latest_extra = latest['extra'] in set(fav)
+            
+            st.markdown(f"Total Wins: **{len(fav_results)}**")
+            st.markdown(f"Major Wins (4th+): <span class='win-highlight'>{len(high_tier)}</span>", unsafe_allow_html=True)
+            
+            # Latest Draw Status
+            if latest_match >= 3:
+                st.warning(f"🔔 Latest Draw: {latest_match} matches!")
+            else:
+                st.write(f"Latest Draw: {latest_match} matches")
+                
+            if st.button(f"Clear Slot {idx+1}", key=f"clear_{idx}"):
+                st.session_state.fav_sets[idx] = None
+                st.rerun()
+        else:
+            st.info("Slot Empty")
+
+st.write("---")
+
+# --- ANALYSIS TABS ---
 tab1, tab2, tab3 = st.tabs(["📊 Statistics", "📈 Trends", "🧠 AI Oracle"])
 
 with tab1:
@@ -144,7 +199,6 @@ with tab1:
     all_draws = recent_df[num_cols].values.flatten()
     freq = Counter(all_draws)
     freq_df = pd.DataFrame(freq.items(), columns=['Number', 'Count']).sort_values('Count', ascending=False)
-    
     with col_l:
         st.subheader(f"Frequency (Last {window} Draws)")
         fig = px.bar(freq_df.head(25), x='Number', y='Count', color='Count', color_continuous_scale='Oranges', template="plotly_dark")
@@ -169,7 +223,6 @@ with tab3:
             future = m.make_future_dataframe(periods=1, freq='3D')
             forecast = m.predict(future)
             next_sum = forecast['yhat'].iloc[-1]
-            
             c1, c2 = st.columns(2)
             with c1:
                 fig_gauge = go.Figure(go.Indicator(mode="gauge+number", value=next_sum, title={'text': "Predicted Sum Index"}, gauge={'bar': {'color': "#FF6B35"}}))
