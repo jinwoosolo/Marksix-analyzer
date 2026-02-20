@@ -5,3 +5,4 @@ numpy
 prophet
 plotly-resampler
 cmdstanpy
+google-cloud-firestore
