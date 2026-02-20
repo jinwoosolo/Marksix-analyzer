@@ -7,10 +7,10 @@ from collections import Counter
 import datetime
 import numpy as np
 
-# --- APP CONFIGURATION ---
+# --- APP 配置 ---
 st.set_page_config(page_title="六合彩 AI 專業分析器 Pro", page_icon="🎰", layout="wide")
 
-# Modern UI Styling
+# 專業介面 CSS 樣式
 st.markdown("""
     <style>
     .main { background-color: #0e1117; }
@@ -31,29 +31,29 @@ st.markdown("""
         border: 1px solid rgba(255, 255, 255, 0.1); margin-bottom: 5px;
     }
     .win-highlight { color: #FF6B35; font-weight: bold; font-size: 1.1em; }
-    .date-list { font-size: 0.75em; color: #aaa; margin-top: 5px; line-height: 1.4; }
+    .date-list { font-size: 0.75em; color: #aaa; margin-top: 5px; line-height: 1.5; }
     .section-header { margin-top: 15px; margin-bottom: 15px; font-weight: bold; border-left: 5px solid #FF6B35; padding-left: 10px; }
     .ai-analysis-box { background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 107, 53, 0.2); border-radius: 12px; padding: 15px; color: #e0e0e0; line-height: 1.6; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- FIXED FAVORITE SETS ---
-# Setting your specific sets as hardcoded constants
+# --- 固定最愛組合 ---
+# 設定您要求的三組固定號碼
 FIXED_FAV_SETS = [
     {5, 11, 12, 13, 15, 27},
     {9, 10, 22, 24, 30, 49},
     {19, 23, 25, 39, 44, 46}
 ]
 
-# --- CORE DATA LOGIC ---
+# --- 核心數據邏輯 ---
 @st.cache_data(ttl=3600)
 def load_data():
-    """Load data and pre-process into NumPy for speed."""
+    """載入數據並預處理為 NumPy 格式以提升速度"""
     df = pd.read_csv('marksix.csv')
     df['date_parsed'] = pd.to_datetime(df['date'], format='mixed')
     df = df.sort_values('date_parsed', ascending=True).reset_index(drop=True)
     
-    # Pre-extract NumPy arrays for high-speed calculation
+    # 預提取 NumPy 數組以供高速運算
     draws_matrix = df[['n1', 'n2', 'n3', 'n4', 'n5', 'n6']].values
     extras_array = df['extra'].values
     dates_array = df['date'].values
@@ -62,7 +62,7 @@ def load_data():
 
 @st.cache_data(show_spinner=False)
 def get_all_historical_wins_fast(user_set_tuple, total_count):
-    """NumPy-optimized historical win checker."""
+    """NumPy 優化版歷史中獎檢查器"""
     _, draws, extras, dates = load_data()
     user_set = set(user_set_tuple)
     results = []
@@ -90,7 +90,8 @@ def get_all_historical_wins_fast(user_set_tuple, total_count):
         if prize:
             results.append({"Date": dates[i], "Prize": prize, "Rank": rank})
             
-    return results
+    # 按獎項等級排序（1獎優先），同等級按日期排序（最新優先）
+    return sorted(results, key=lambda x: (x['Rank'], x['Date']), reverse=False)
 
 try:
     df_asc, draws_np, extras_np, dates_np = load_data()
@@ -98,13 +99,13 @@ try:
     total_records = len(df_asc)
     num_cols = ['n1', 'n2', 'n3', 'n4', 'n5', 'n6']
 except Exception as e:
-    st.error(f"Error loading data: {e}"); st.stop()
+    st.error(f"數據載入出錯: {e}"); st.stop()
 
-# --- INITIALIZE STATE ---
+# --- 初始化狀態 ---
 if 'selected_nums' not in st.session_state: 
     st.session_state.selected_nums = set()
 
-# --- SIDEBAR ---
+# --- 側邊欄 ---
 with st.sidebar:
     st.title("⚙️ 控制面板")
     st.subheader("顯示設定")
@@ -117,7 +118,7 @@ with st.sidebar:
     window = st.slider("統計窗口 (期數)", 10, 500, 100)
     st.info(f"📊 總開彩: {total_records} 期")
 
-# --- DASHBOARD HEADER ---
+# --- 頁首資訊 ---
 latest = df_desc.iloc[0]
 st.title("🎰 六合彩 AI 專業分析器 Pro")
 c_m1, c_m2, c_m3 = st.columns(3)
@@ -125,7 +126,7 @@ with c_m1: st.markdown(f"<div class='metric-card'><span class='stat-label'>最�
 with c_m2: st.markdown(f"<div class='metric-card'><span class='stat-label'>中獎號碼</span><br><span class='stat-val'>{'  '.join([str(int(latest[n])) for n in num_cols])}</span></div>", unsafe_allow_html=True)
 with c_m3: st.markdown(f"<div class='metric-card'><span class='stat-label'>特別號碼</span><br><span class='stat-val' style='color:#7FD1B9'>{int(latest['extra'])}</span></div>", unsafe_allow_html=True)
 
-# --- 1. FAVORITE SETS TRACKER (FIXED SETS) ---
+# --- 1. 固定組合即時追蹤 ---
 if v_fav:
     st.markdown("<h3 class='section-header'>⭐ 固定組合即時追蹤</h3>", unsafe_allow_html=True)
     f_cols = st.columns(3)
@@ -136,14 +137,21 @@ if v_fav:
             sorted_fav = sorted(list(fav))
             st.code(" ".join(map(str, sorted_fav)))
             
+            # 獲取歷史獲獎數據
             f_res = get_all_historical_wins_fast(tuple(sorted_fav), total_records)
             
+            # 大獎定義為 4 獎或以上 (Rank 1-4)
             high = [r for r in f_res if r['Rank'] <= 4]
-            latest_nums = {int(latest[n]) for n in num_cols}
-            l_match = len(fav.intersection(latest_nums))
+            latest_nums_set = {int(latest[n]) for n in num_cols}
+            l_match = len(fav.intersection(latest_nums_set))
             
-            st.markdown(f"總中獎: **{len(f_res)}** | 大獎: <span class='win-highlight'>{len(high)}</span>", unsafe_allow_html=True)
-            if high: st.markdown(f"<div class='date-list'><b>近期大獎:</b> {', '.join([r['Date'] for r in high[:5]])}{'...' if len(high) > 5 else ''}</div>", unsafe_allow_html=True)
+            st.markdown(f"總中獎次數: **{len(f_res)}** | 大獎: <span class='win-highlight'>{len(high)}</span>", unsafe_allow_html=True)
+            
+            if high:
+                # 格式化顯示近期大獎的日期與獎項
+                formatted_wins = [f"{r['Date']} ({r['Prize']})" for r in high[:5]]
+                wins_html = "<br>".join(formatted_wins)
+                st.markdown(f"<div class='date-list'><b>近期大獎紀錄:</b><br>{wins_html}{'<br>...' if len(high) > 5 else ''}</div>", unsafe_allow_html=True)
             
             if l_match >= 3: 
                 st.warning(f"🔔 最新一期中 {l_match} 字！")
@@ -152,7 +160,7 @@ if v_fav:
             
             st.markdown("</div>", unsafe_allow_html=True)
 
-# --- 2. AI PREDICTION ---
+# --- 2. AI 智能預測 ---
 if v_ai:
     st.write("---")
     st.markdown("<h3 class='section-header'>🔮 AI 智能預測與深度分析 (下期推薦 12 字)</h3>", unsafe_allow_html=True)
@@ -179,7 +187,7 @@ if v_ai:
                 st.markdown("#### 📝 預測邏輯分析")
                 st.markdown(f"""<div class="ai-analysis-box"><strong>1. 總和趨勢：</strong> Prophet 模型預測總和約 <strong>{n_sum:.1f}</strong>。代表偏向於 <strong>{"大數組合" if n_sum > 150 else "小數組合"}</strong>。<br><br><strong>2. 策略：</strong> 結合 8 熱門號碼與 4 個冷門回歸號碼。<br><br><strong>3. 平衡：</strong> {len([x for x in ai_12 if x%2!=0])}單:{len([x for x in ai_12 if x%2==0])}雙 | {len([x for x in ai_12 if x>24])}大:{len([x for x in ai_12 if x<=24])}小</div>""", unsafe_allow_html=True)
 
-# --- 3. PRIZE CHECKER ---
+# --- 3. 歷史中獎檢查器 ---
 if v_check:
     st.write("---")
     ch_c1, ch_c2 = st.columns([5, 1])
@@ -207,7 +215,7 @@ if v_check:
         else:
             st.info("此組合在歷史中未曾獲獎。")
 
-# --- 4. BACKTEST LAB ---
+# --- 4. 回測實驗室 ---
 if v_test:
     st.write("---")
     st.markdown("<h3 class='section-header'>📈 AI 準確度回測實驗室 (12字策略)</h3>", unsafe_allow_html=True)
@@ -237,7 +245,7 @@ if v_test:
             prog.progress((i-s_idx)/(total_records-s_idx))
         st.write(pc); st.dataframe(pd.DataFrame(log), width='stretch')
 
-# --- 5. CHARTS ---
+# --- 5. 圖表分析 ---
 if v_chart:
     st.write("---")
     t1, t2 = st.tabs(["📊 出字頻率", "📈 總和趨勢"])
