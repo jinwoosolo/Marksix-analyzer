@@ -7,7 +7,7 @@ from collections import Counter
 import datetime
 
 # --- 基礎配置 ---
-st.set_page_config(page_title="六合彩 AI 專業分析器", page_icon="🎰", layout="wide")
+st.set_page_config(page_title="六合彩 AI 專業分析器 Pro", page_icon="🎰", layout="wide")
 
 # 專業介面 CSS
 st.markdown("""
@@ -64,7 +64,8 @@ if 'fav_sets' not in st.session_state:
 def load_data():
     df = pd.read_csv('marksix.csv')
     df['date_parsed'] = pd.to_datetime(df['date'], format='mixed')
-    return df.sort_values('date_parsed', ascending=False).reset_index(drop=True)
+    # 確保數據按日期從舊到新排列以便回測
+    return df.sort_values('date_parsed', ascending=True).reset_index(drop=True)
 
 def calculate_prizes(user_set, draw_set, extra_num):
     """計算單次開獎的中獎等級"""
@@ -82,8 +83,11 @@ def calculate_prizes(user_set, draw_set, extra_num):
     return None, 99
 
 try:
-    df = load_data()
-    total_records = len(df)
+    # 我們將 df 載入為升序排列，方便歷史回測邏輯
+    df_asc = load_data()
+    # 用於顯示的則用降序排列
+    df_desc = df_asc.sort_values('date_parsed', ascending=False).reset_index(drop=True)
+    total_records = len(df_asc)
     num_cols = ['n1', 'n2', 'n3', 'n4', 'n5', 'n6']
 except Exception as e:
     st.error(f"⚠️ 載入數據出錯: {e}")
@@ -103,8 +107,8 @@ with st.sidebar:
     st.info(f"📊 總開彩次數: {total_records}")
 
 # --- 頁首資訊 ---
-st.title("🎰 六合彩 AI 專業分析器")
-latest = df.iloc[0]
+st.title("🎰 六合彩 AI 專業分析器 Pro")
+latest = df_desc.iloc[0]
 l_nums = "  ".join([str(int(latest[n])) for n in num_cols])
 
 c1, c2, c3 = st.columns(3)
@@ -128,7 +132,7 @@ if show_favs:
                 
                 # 計算歷史表現
                 all_results = []
-                for _, row in df.iterrows():
+                for _, row in df_desc.iterrows():
                     p, r = calculate_prizes(fav, [row[n] for n in num_cols], row['extra'])
                     if p: all_results.append({"Date": row['date'], "Prize": p, "Rank": r})
                 
@@ -153,62 +157,88 @@ if show_favs:
             else:
                 st.info(f"位置 {idx+1} 尚未儲存")
 
-# --- 2. 準確度回測實驗室 (新增) ---
+# --- 2. 準確度回測實驗室 (模擬測試) ---
 if show_backtest:
     st.write("---")
-    st.markdown("<h3 class='section-header'>📈 AI 準確度回測實驗室 (模擬測試)</h3>", unsafe_allow_html=True)
-    st.write("此功能會「假裝不知道過去結果」，模擬 AI 在過去每一期選出的號碼，並計算實際回報。")
+    st.markdown("<h3 class='section-header'>📈 AI 準確度回測實驗室 (模擬預測 18 個字)</h3>", unsafe_allow_html=True)
+    st.write("系統會模擬 AI 策略（12熱 + 6冷 = 18個字），從歷史第一期起進行「逐期預測測試」。")
     
-    test_range = st.select_slider("回測範圍 (最近幾多期)", options=[50, 100, 200, 500], value=100)
+    # 用戶可以選擇回測深度
+    test_options = ["最近 100 期", "最近 500 期", "全歷史紀錄 (需時較長)"]
+    test_depth_sel = st.selectbox("選擇回測範圍", test_options, index=0)
     
-    if st.button("開始大規模回測分析", type="primary"):
+    if test_depth_sel == "最近 100 期":
+        start_idx = max(50, total_records - 100)
+    elif test_depth_sel == "最近 500 期":
+        start_idx = max(50, total_records - 500)
+    else:
+        start_idx = 50 # 從第 51 期開始預測 (前 50 期作基礎)
+
+    if st.button("啟動全量回測分析", type="primary"):
         results_log = []
         prizes_count = Counter()
         
-        with st.spinner(f"正在分析過去 {test_range} 期的預測表現..."):
-            # 我們從較舊的日期開始往最新日期推算
-            test_df = df.head(test_range + 50) # 多取一點數據作為初始統計窗口
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        total_to_test = total_records - start_idx
+        
+        # 開始逐期循環
+        for i in range(start_idx, total_records):
+            # 目標期 (要預測的那一期)
+            target_row = df_asc.iloc[i]
+            # 參考期 (該期之前的 50 期數據)
+            history_before = df_asc.iloc[i-50:i]
             
-            for i in range(test_range, 0, -1):
-                # 目前要「預測」的那一期
-                target_row = df.iloc[i-1]
-                # 預測時只能參考 target 之前的數據
-                history_before = df.iloc[i:i+50] 
-                
-                if len(history_before) < 50: continue
-                
-                # AI 策略: 4熱 + 2冷 (基於當時的 50 期窗口)
-                flat_history = history_before[num_cols].values.flatten()
-                freq = Counter(flat_history).most_common()
-                hot = [x[0] for x in freq[:4]]
-                cold = [x[0] for x in freq[-2:]]
-                ai_pick = set(hot + cold)
-                
-                # 檢查結果
-                draw_nums = [target_row[n] for n in num_cols]
-                prize_name, rank = calculate_prizes(ai_pick, draw_nums, target_row['extra'])
-                
-                if prize_name:
-                    prizes_count[prize_name] += 1
-                    results_log.append({"日期": target_row['date'], "AI 號碼": sorted(list(ai_pick)), "結果": prize_name})
+            # AI 18 字策略: 12熱 + 6冷
+            flat_history = history_before[num_cols].values.flatten()
+            freq = Counter(flat_history).most_common()
+            hot_12 = [x[0] for x in freq[:12]]
+            cold_6 = [x[0] for x in freq[-6:]]
+            ai_18_pick = set(hot_12 + cold_6)
             
-        # 顯示結果
+            # 獲取實際號碼以便對比
+            actual_nums = [int(target_row[n]) for n in num_cols]
+            special_num = int(target_row['extra'])
+            
+            # 檢查中獎情況
+            prize_name, rank = calculate_prizes(ai_18_pick, actual_nums, special_num)
+            
+            if prize_name:
+                prizes_count[prize_name] += 1
+                results_log.append({
+                    "日期": target_row['date'],
+                    "AI 預測 (18字)": sorted(list(ai_18_pick)),
+                    "當期開彩 (6+1)": f"{actual_nums} + ({special_num})",
+                    "結果": prize_name
+                })
+            
+            if (i - start_idx) % 50 == 0:
+                progress_bar.progress((i - start_idx) / total_to_test)
+                status_text.text(f"正在模擬分析日期: {target_row['date']}...")
+
+        progress_bar.empty()
+        status_text.empty()
+        st.success(f"回測完成！共測試了 {total_to_test} 期。")
+            
+        # 顯示結果統計
         res_col1, res_col2 = st.columns([1, 2])
         with res_col1:
-            st.metric("總測試期數", test_range)
-            st.write("**獲獎統計:**")
+            st.metric("回測總期數", total_to_test)
+            st.write("**獲獎匯總:**")
             if prizes_count:
-                for p, c in prizes_count.items():
-                    st.write(f"- {p}: {c} 次")
+                for p in ["1st Prize", "2nd Prize", "3rd Prize", "4th Prize", "5th Prize", "6th Prize", "7th Prize"]:
+                    if prizes_count[p] > 0:
+                        st.write(f"- **{p}**: {prizes_count[p]} 次")
             else:
-                st.write("😔 在這段期間內未命中任何獎項。")
+                st.write("😔 未命中任何獎項（18字組合仍需極大運氣）。")
         
         with res_col2:
             if results_log:
-                st.write("**詳細獲獎紀錄:**")
-                st.table(pd.DataFrame(results_log))
+                st.write("**詳細獲獎與對比紀錄:**")
+                st.dataframe(pd.DataFrame(results_log), use_container_width=True)
             else:
-                st.info("統計學提示：頭獎機率極低。此 AI 策略旨在提高命中 7 獎的頻率。")
+                st.info("在回測範圍內，這套 18 字策略未能在模擬中獲獎。")
 
 # --- 3. 中獎檢查器 ---
 if show_checker:
@@ -241,9 +271,9 @@ if show_checker:
                     st.session_state.fav_sets[idx] = selected_list
                     sync_favs_to_url(); st.toast("已儲存！"); st.rerun()
 
-        # 搜尋歷史
+        # 搜尋歷史 (使用 desc 列表顯示最新結果優先)
         history_results = []
-        for _, row in df.iterrows():
+        for _, row in df_desc.iterrows():
             p, r = calculate_prizes(selected_list, [row[n] for n in num_cols], row['extra'])
             if p: history_results.append({"Date": row['date'], "Prize": p, "Rank": r})
         
@@ -257,38 +287,47 @@ if show_checker:
 # --- 4. 分析圖表 ---
 if show_analysis:
     st.write("---")
-    t1, t2, t3 = st.tabs(["📊 出字頻率", "📈 總和趨勢", "🧠 AI Oracle 預測"])
+    t1, t2, t3 = st.tabs(["📊 出字頻率", "📈 總和趨勢", "🧠 AI Oracle 預測 (18字大底)"])
     
     with t1:
-        recent = df.head(window_size)
+        recent = df_desc.head(window_size)
         all_draws = recent[num_cols].values.flatten()
         freq_df = pd.DataFrame(Counter(all_draws).items(), columns=['Number', 'Count']).sort_values('Count', ascending=False)
         fig = px.bar(freq_df.head(25), x='Number', y='Count', color='Count', color_continuous_scale='Oranges', template="plotly_dark")
         st.plotly_chart(fig, use_container_width=True)
 
     with t2:
-        df['draw_sum'] = df[num_cols].sum(axis=1)
-        fig_trend = px.area(df.head(window_size), x='date_parsed', y='draw_sum', template="plotly_dark", color_discrete_sequence=['#FF6B35'])
+        df_desc['draw_sum'] = df_desc[num_cols].sum(axis=1)
+        fig_trend = px.area(df_desc.head(window_size), x='date_parsed', y='draw_sum', template="plotly_dark", color_discrete_sequence=['#FF6B35'])
         st.plotly_chart(fig_trend, use_container_width=True)
 
     with t3:
-        st.header("Prophet 智能預測引擎")
+        st.header("Prophet 智能預測引擎 (18字版本)")
         if st.button("生成下期預測報告", type="primary"):
-            with st.spinner("正在計算統計模型..."):
-                p_df = df.rename(columns={'date_parsed': 'ds', 'draw_sum': 'y'})[['ds', 'y']].dropna()
+            with st.spinner("正在計算 22 年數據與預測大底組合..."):
+                p_df = df_desc.rename(columns={'date_parsed': 'ds', 'draw_sum': 'y'})[['ds', 'y']].dropna()
                 m = Prophet(daily_seasonality=False, weekly_seasonality=True)
                 m.fit(p_df)
                 forecast = m.predict(m.make_future_dataframe(periods=1, freq='3D'))
                 next_sum = forecast['yhat'].iloc[-1]
                 
-                c_low, c_high = st.columns(2)
+                c_low, c_high = st.columns([1, 2])
                 with c_low:
                     fig_g = go.Figure(go.Indicator(mode="gauge+number", value=next_sum, title={'text': "預測總和指標"}, gauge={'bar':{'color':"#FF6B35"}}))
                     st.plotly_chart(fig_g, use_container_width=True)
                 with c_high:
-                    # 使用熱冷邏輯
-                    recent_counts = Counter(df.head(50)[num_cols].values.flatten()).most_common()
-                    hot = [int(x[0]) for x in recent_counts[:4]]
-                    cold = [int(x[0]) for x in recent_counts[-2:]]
-                    ai_pick = sorted(hot + cold)
-                    st.markdown(f"<div style='background:rgba(255,107,53,0.1);padding:40px;border-radius:20px;text-align:center;border:2px solid #FF6B35;'><h3 style='color:white;'>AI 推薦組合</h3><h1 style='color:#FF6B35;letter-spacing:8px;'>{' '.join(map(str, ai_pick))}</h1><p>基於「4熱 2冷」策略</p></div>", unsafe_allow_html=True)
+                    # 使用 12熱 + 6冷 = 18字策略
+                    recent_counts = Counter(df_desc.head(window_size)[num_cols].values.flatten()).most_common()
+                    hot = [int(x[0]) for x in recent_counts[:12]]
+                    cold = [int(x[0]) for x in recent_counts[-6:]]
+                    ai_18_pick = sorted(hot + cold)
+                    st.markdown(f"""
+                    <div style='background:rgba(255,107,53,0.1);padding:30px;border-radius:20px;text-align:center;border:2px solid #FF6B35;'>
+                        <h3 style='color:white;'>AI 推薦 18 字大底組合</h3>
+                        <h1 style='color:#FF6B35; letter-spacing:3px; font-size: 2.2em;'>
+                            {' '.join(map(str, ai_18_pick[:9]))}<br>
+                            {' '.join(map(str, ai_18_pick[9:]))}
+                        </h1>
+                        <p style='color:#aaa;'>策略：前 {window_size} 期最強 12 熱門字 + 6 絕冷門字</p>
+                    </div>
+                    """, unsafe_allow_html=True)
