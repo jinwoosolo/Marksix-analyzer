@@ -58,9 +58,6 @@ except Exception as e:
 with st.sidebar:
     st.title("Control Panel")
     window = st.slider("Statistics Window", 10, total_records, 100)
-    if st.button("Reset Selection"):
-        st.session_state.selected_nums = set()
-        st.rerun()
     st.divider()
     st.info(f"📊 Total Draws: {total_records}")
 
@@ -78,7 +75,15 @@ with c3:
     st.markdown(f"<div class='metric-card'><span class='stat-label'>Special</span><br><span class='stat-val' style='color:#7FD1B9'>{int(latest['extra'])}</span></div>", unsafe_allow_html=True)
 
 # --- HISTORICAL PRIZE CHECKER (ABOVE TABS) ---
-st.markdown("### 🔎 Historical Prize Checker")
+# Header and Reset Button in columns
+header_col1, header_col2 = st.columns([5, 1])
+with header_col1:
+    st.markdown("### 🔎 Historical Prize Checker")
+with header_col2:
+    if st.button("Reset Selection", use_container_width=True):
+        st.session_state.selected_nums = set()
+        st.rerun()
+
 st.write("Click numbers below to select your 6-number combination.")
 
 # Grid UI
@@ -88,8 +93,6 @@ for i in range(1, 50):
         is_selected = i in st.session_state.selected_nums
         btn_label = f"{i:02d}"
         
-        # Use custom class for selected state via markdown injection if possible, 
-        # or just logic to handle click
         if st.button(btn_label, key=f"btn_{i}", use_container_width=True, 
                      type="primary" if is_selected else "secondary"):
             if i in st.session_state.selected_nums:
