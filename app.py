@@ -175,7 +175,7 @@ if show_ai_predict:
             # 顯示
             a_col1, a_col2 = st.columns([1, 1.5])
             with a_col1:
-                st.markdown("#### 🎯 AI 推薦 12 字大底")
+                st.markdown("#### 🎯 AI 推薦 12 字組合")
                 st.markdown(f"""
                 <div style='background: linear-gradient(45deg, #FF6B35, #F7931E); padding: 30px; border-radius: 15px; text-align: center; color: white;'>
                     <h1 style='font-size: 2.2em; letter-spacing: 5px;'>{' '.join(map(str, ai_12[:6]))}<br>{' '.join(map(str, ai_12[6:]))}</h1>
@@ -192,7 +192,6 @@ if show_ai_predict:
                 odd_count = len([x for x in ai_12 if x % 2 != 0])
                 big_count = len([x for x in ai_12 if x > 24])
                 
-                # 直接使用 Markdown 渲染，避免 HTML 渲染失敗
                 st.markdown(f"""
                 <div class="ai-analysis-box">
                     <strong>1. 總和趨勢分析：</strong><br>
@@ -246,24 +245,57 @@ if show_checker:
 # --- 4. 回測實驗室 ---
 if show_backtest:
     st.write("---")
-    st.markdown("<h3 class='section-header'>📈 AI 準確度回測 (模擬 18 字大底)</h3>", unsafe_allow_html=True)
+    st.markdown("<h3 class='section-header'>📈 AI 準確度回測 (模擬 12 字組合)</h3>", unsafe_allow_html=True)
+    st.write("系統會從歷史第一期起，利用當時的數據模擬「8熱 + 4冷」預測 12 個號碼。")
+    
     depth = st.selectbox("回測範圍", ["最近 100 期", "最近 500 期", "全歷史紀錄"])
     s_idx = 50 if "全" in depth else (total_records-100 if "100" in depth else total_records-500)
-    if st.button("執行回測"):
+    
+    if st.button("執行 12 字回測"):
         log, pc = [], Counter()
         prog = st.progress(0)
+        status = st.empty()
+        
         for i in range(max(50, s_idx), total_records):
-            tar = df_asc.iloc[i]; hist = df_asc.iloc[i-50:i]
+            tar = df_asc.iloc[i]
+            hist = df_asc.iloc[i-50:i]
+            
+            # 8熱 + 4冷 邏輯
             fq = Counter(hist[num_cols].values.flatten()).most_common()
-            ai_18 = set([x[0] for x in fq[:12]] + [x[0] for x in fq[-6:]])
-            p, r = calculate_prizes(ai_18, [tar[n] for n in num_cols], int(tar['extra']))
+            ai_12 = set([x[0] for x in fq[:8]] + [x[0] for x in fq[-4:]])
+            
+            p, r = calculate_prizes(ai_12, [tar[n] for n in num_cols], int(tar['extra']))
             if p:
                 pc[p] += 1
-                log.append({"日期": tar['date'], "開彩": f"{[int(tar[n]) for n in num_cols]} + ({int(tar['extra'])})", "結果": p})
-            prog.progress((i-s_idx)/(total_records-s_idx))
-        st.write(pc); st.dataframe(pd.DataFrame(log))
+                log.append({
+                    "日期": tar['date'], 
+                    "AI 預測 (12字)": sorted(list(ai_12)),
+                    "開彩紀錄": f"{[int(tar[n]) for n in num_cols]} + ({int(tar['extra'])})", 
+                    "結果": p
+                })
+            
+            if (i % 50 == 0):
+                prog.progress((i-s_idx)/(total_records-s_idx))
+                status.text(f"處理中: {tar['date']}")
+        
+        prog.empty()
+        status.empty()
+        
+        c_res1, c_res2 = st.columns([1, 2])
+        with c_res1:
+            st.write("**回測獲獎統計:**")
+            if pc:
+                for rank_name in ["1st Prize", "2nd Prize", "3rd Prize", "4th Prize", "5th Prize", "6th Prize", "7th Prize"]:
+                    if pc[rank_name] > 0:
+                        st.write(f"- {rank_name}: {pc[rank_name]} 次")
+            else:
+                st.write("未命中任何獎項。")
+        with c_res2:
+            if log:
+                st.write("**詳細對比紀錄:**")
+                st.dataframe(pd.DataFrame(log), use_container_width=True)
 
-# --- 5. 圖表 ---
+# --- 5. 分析圖表 ---
 if show_analysis:
     st.write("---")
     t1, t2 = st.tabs(["📊 出字頻率", "📈 總和趨勢"])
