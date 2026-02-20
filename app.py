@@ -31,16 +31,37 @@ st.markdown("""
         margin-bottom: 5px;
     }
     .win-highlight { color: #FF6B35; font-weight: bold; font-size: 1.1em; }
-    .date-list { font-size: 0.8em; color: #aaa; margin-top: 5px; line-height: 1.2; }
-    .section-header { margin-top: 0px; margin-bottom: 10px; }
+    .date-list { font-size: 0.8em; color: #aaa; margin-top: 5px; line-height: 1.4; }
+    .section-header { margin-top: 0px; margin-bottom: 10px; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
+
+# --- PERSISTENCE LOGIC (QUERY PARAMS) ---
+def sync_favs_to_url():
+    """Update URL query parameters to match the current fav_sets in session state."""
+    params = {}
+    for i, fav in enumerate(st.session_state.fav_sets):
+        if fav:
+            params[f"fav{i}"] = ",".join(map(str, sorted(list(fav))))
+    st.query_params.update(params)
+
+def load_favs_from_url():
+    """Initialize session state from URL query parameters."""
+    favs = [None, None, None]
+    for i in range(3):
+        param_val = st.query_params.get(f"fav{i}")
+        if param_val:
+            try:
+                favs[i] = [int(x) for x in param_val.split(",")]
+            except:
+                pass
+    return favs
 
 # --- SESSION STATE ---
 if 'selected_nums' not in st.session_state:
     st.session_state.selected_nums = set()
 if 'fav_sets' not in st.session_state:
-    st.session_state.fav_sets = [None, None, None]
+    st.session_state.fav_sets = load_favs_from_url()
 
 @st.cache_data(ttl=3600)
 def load_data():
@@ -50,6 +71,7 @@ def load_data():
 
 def calculate_prizes(user_set, data):
     """Calculates all prizes for a given set across the dataset."""
+    user_set = set(user_set)
     results = []
     for _, row in data.iterrows():
         draw_set = {row['n1'], row['n2'], row['n3'], row['n4'], row['n5'], row['n6']}
@@ -102,7 +124,7 @@ for idx, fav in enumerate(st.session_state.fav_sets):
             st.markdown(f"<div class='favorite-card'>", unsafe_allow_html=True)
             st.markdown(f"**Slot {idx+1}**")
             st.code(f"{' '.join(map(str, fav))}")
-            fav_results = calculate_prizes(set(fav), df)
+            fav_results = calculate_prizes(fav, df)
             high_tier = [r for r in fav_results if r['Rank'] <= 4]
             latest_draw_set = {latest['n1'], latest['n2'], latest['n3'], latest['n4'], latest['n5'], latest['n6']}
             latest_match = len(set(fav).intersection(latest_draw_set))
@@ -112,7 +134,7 @@ for idx, fav in enumerate(st.session_state.fav_sets):
             
             if high_tier:
                 dates = [r['Date'] for r in high_tier]
-                st.markdown(f"<div class='date-list'><b>Major Dates:</b><br>{', '.join(dates)}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='date-list'><b>Major Win Dates:</b><br>{', '.join(dates)}</div>", unsafe_allow_html=True)
             
             if latest_match >= 3:
                 st.warning(f"🔔 Latest: {latest_match} matches!")
@@ -121,6 +143,7 @@ for idx, fav in enumerate(st.session_state.fav_sets):
                 
             if st.button(f"Clear Slot {idx+1}", key=f"clear_{idx}", use_container_width=True):
                 st.session_state.fav_sets[idx] = None
+                sync_favs_to_url()
                 st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
         else:
@@ -161,10 +184,11 @@ if len(selected_list) == 6:
         with save_cols[idx]:
             if st.button(f"Save to Slot {idx+1}", key=f"save_{idx}", use_container_width=True):
                 st.session_state.fav_sets[idx] = selected_list
-                st.toast(f"Slot {idx+1} updated!")
+                sync_favs_to_url()
+                st.toast(f"Slot {idx+1} saved!")
                 st.rerun()
 
-    results = calculate_prizes(set(selected_list), df)
+    results = calculate_prizes(selected_list, df)
     if results:
         st.success(f"🎉 Result found: **{len(results)}** wins in total")
         # Order by Prize Rank (Rank 1 = 1st Prize, etc.)
@@ -173,7 +197,7 @@ if len(selected_list) == 6:
     else:
         st.info("No historical wins found for this set.")
 
-# --- ANALYSIS TABS (SIDEBAR-CONTROLLED) ---
+# --- ANALYSIS TABS ---
 st.write("---")
 with st.sidebar:
     st.title("Control Panel")
