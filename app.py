@@ -37,28 +37,13 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- LOCAL PERSISTENCE LOGIC (URL BASED) ---
-def sync_favs_to_url():
-    """Saves favorite sets to the URL query parameters."""
-    params = {}
-    for i, fav in enumerate(st.session_state.fav_sets):
-        if fav:
-            params[f"fav{i}"] = ",".join(map(str, sorted(list(fav))))
-        else:
-            params[f"fav{i}"] = ""
-    st.query_params.update(params)
-
-def load_favs_from_url():
-    """Loads favorite sets from URL query parameters."""
-    favs = [None, None, None]
-    for i in range(3):
-        val = st.query_params.get(f"fav{i}", "")
-        if val:
-            try:
-                favs[i] = {int(x) for x in val.split(",")}
-            except:
-                pass
-    return favs
+# --- FIXED FAVORITE SETS ---
+# Setting your specific sets as hardcoded constants
+FIXED_FAV_SETS = [
+    {5, 11, 12, 13, 15, 27},
+    {9, 10, 22, 24, 30, 49},
+    {19, 23, 25, 39, 44, 46}
+]
 
 # --- CORE DATA LOGIC ---
 @st.cache_data(ttl=3600)
@@ -116,8 +101,6 @@ except Exception as e:
     st.error(f"Error loading data: {e}"); st.stop()
 
 # --- INITIALIZE STATE ---
-if 'fav_sets' not in st.session_state: 
-    st.session_state.fav_sets = load_favs_from_url()
 if 'selected_nums' not in st.session_state: 
     st.session_state.selected_nums = set()
 
@@ -142,35 +125,32 @@ with c_m1: st.markdown(f"<div class='metric-card'><span class='stat-label'>最�
 with c_m2: st.markdown(f"<div class='metric-card'><span class='stat-label'>中獎號碼</span><br><span class='stat-val'>{'  '.join([str(int(latest[n])) for n in num_cols])}</span></div>", unsafe_allow_html=True)
 with c_m3: st.markdown(f"<div class='metric-card'><span class='stat-label'>特別號碼</span><br><span class='stat-val' style='color:#7FD1B9'>{int(latest['extra'])}</span></div>", unsafe_allow_html=True)
 
-# --- 1. FAVORITE SETS TRACKER ---
+# --- 1. FAVORITE SETS TRACKER (FIXED SETS) ---
 if v_fav:
-    st.markdown("<h3 class='section-header'>⭐ 我的最愛組合追蹤</h3>", unsafe_allow_html=True)
+    st.markdown("<h3 class='section-header'>⭐ 固定組合即時追蹤</h3>", unsafe_allow_html=True)
     f_cols = st.columns(3)
-    for i, fav in enumerate(st.session_state.fav_sets):
+    for i, fav in enumerate(FIXED_FAV_SETS):
         with f_cols[i]:
-            if fav:
-                st.markdown("<div class='favorite-card'>", unsafe_allow_html=True)
-                st.markdown(f"**位置 {i+1}**")
-                sorted_fav = sorted(list(fav))
-                st.code(" ".join(map(str, sorted_fav)))
-                
-                f_res = get_all_historical_wins_fast(tuple(sorted_fav), total_records)
-                
-                high = [r for r in f_res if r['Rank'] <= 4]
-                latest_nums = {int(latest[n]) for n in num_cols}
-                l_match = len(fav.intersection(latest_nums))
-                
-                st.markdown(f"總中獎: **{len(f_res)}** | 大獎: <span class='win-highlight'>{len(high)}</span>", unsafe_allow_html=True)
-                if high: st.markdown(f"<div class='date-list'><b>日期:</b> {', '.join([r['Date'] for r in high])}</div>", unsafe_allow_html=True)
-                if l_match >= 3: st.warning(f"🔔 最新一期中獎！")
-                
-                if st.button(f"清除 Slot {i+1}", key=f"clr_{i}", width='stretch'):
-                    st.session_state.fav_sets[i] = None
-                    sync_favs_to_url()
-                    st.rerun()
-                st.markdown("</div>", unsafe_allow_html=True)
+            st.markdown("<div class='favorite-card'>", unsafe_allow_html=True)
+            st.markdown(f"**固定組合 {i+1}**")
+            sorted_fav = sorted(list(fav))
+            st.code(" ".join(map(str, sorted_fav)))
+            
+            f_res = get_all_historical_wins_fast(tuple(sorted_fav), total_records)
+            
+            high = [r for r in f_res if r['Rank'] <= 4]
+            latest_nums = {int(latest[n]) for n in num_cols}
+            l_match = len(fav.intersection(latest_nums))
+            
+            st.markdown(f"總中獎: **{len(f_res)}** | 大獎: <span class='win-highlight'>{len(high)}</span>", unsafe_allow_html=True)
+            if high: st.markdown(f"<div class='date-list'><b>近期大獎:</b> {', '.join([r['Date'] for r in high[:5]])}{'...' if len(high) > 5 else ''}</div>", unsafe_allow_html=True)
+            
+            if l_match >= 3: 
+                st.warning(f"🔔 最新一期中 {l_match} 字！")
             else:
-                st.info(f"Slot {i+1} 空位")
+                st.write(f"最新一期中 {l_match} 字")
+            
+            st.markdown("</div>", unsafe_allow_html=True)
 
 # --- 2. AI PREDICTION ---
 if v_ai:
@@ -220,15 +200,6 @@ if v_check:
     st.write(f"**已選組合:** `{sl if sl else '尚未選擇'}` ({len(sl)}/6)")
     
     if len(sl) == 6:
-        st.write("💾 **儲存至位置:**")
-        sv_cols = st.columns(3)
-        for i in range(3):
-            with sv_cols[i]:
-                if st.button(f"存入位置 {i+1}", key=f"sv_{i}", width='stretch'):
-                    st.session_state.fav_sets[i] = set(sl)
-                    sync_favs_to_url()
-                    st.rerun()
-        
         h_res = get_all_historical_wins_fast(tuple(sl), total_records)
         if h_res:
             st.success(f"🎉 歷史共中獎 {len(h_res)} 次")
