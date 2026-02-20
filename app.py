@@ -27,10 +27,11 @@ st.markdown("""
     .stat-label { color: #888; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }
     .favorite-card {
         background: rgba(255, 255, 255, 0.03);
-        padding: 15px; border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.1);
-        margin-top: 10px;
+        padding: 15px; border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.1);
+        margin-bottom: 15px;
     }
-    .win-highlight { color: #FF6B35; font-weight: bold; }
+    .win-highlight { color: #FF6B35; font-weight: bold; font-size: 1.1em; }
+    .date-list { font-size: 0.85em; color: #aaa; margin-top: 5px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -38,7 +39,6 @@ st.markdown("""
 if 'selected_nums' not in st.session_state:
     st.session_state.selected_nums = set()
 if 'fav_sets' not in st.session_state:
-    # Storage for up to 3 favorite sets
     st.session_state.fav_sets = [None, None, None]
 
 @st.cache_data(ttl=3600)
@@ -58,21 +58,14 @@ def calculate_prizes(user_set, data):
         has_extra = extra_num in user_set
         
         prize = ""
-        rank = 99 # To help with filtering
-        if match_count == 6: 
-            prize, rank = "1st Prize", 1
-        elif match_count == 5 and has_extra: 
-            prize, rank = "2nd Prize", 2
-        elif match_count == 5: 
-            prize, rank = "3rd Prize", 3
-        elif match_count == 4 and has_extra: 
-            prize, rank = "4th Prize", 4
-        elif match_count == 4: 
-            prize, rank = "5th Prize", 5
-        elif match_count == 3 and has_extra: 
-            prize, rank = "6th Prize", 6
-        elif match_count == 3: 
-            prize, rank = "7th Prize", 7
+        rank = 99
+        if match_count == 6: prize, rank = "1st Prize", 1
+        elif match_count == 5 and has_extra: prize, rank = "2nd Prize", 2
+        elif match_count == 5: prize, rank = "3rd Prize", 3
+        elif match_count == 4 and has_extra: prize, rank = "4th Prize", 4
+        elif match_count == 4: prize, rank = "5th Prize", 5
+        elif match_count == 3 and has_extra: prize, rank = "6th Prize", 6
+        elif match_count == 3: prize, rank = "7th Prize", 7
             
         if prize:
             results.append({"Date": row['date'], "Prize": prize, "Rank": rank, "Match": match_count})
@@ -106,7 +99,44 @@ with c2:
 with c3:
     st.markdown(f"<div class='metric-card'><span class='stat-label'>Special</span><br><span class='stat-val' style='color:#7FD1B9'>{int(latest['extra'])}</span></div>", unsafe_allow_html=True)
 
-# --- HISTORICAL PRIZE CHECKER ---
+# --- 1. FAVORITE SETS TRACKER (NOW FIRST) ---
+st.markdown("### ⭐ Favorite Sets Tracker")
+fav_cols = st.columns(3)
+for idx, fav in enumerate(st.session_state.fav_sets):
+    with fav_cols[idx]:
+        st.markdown(f"<div class='favorite-card'>", unsafe_allow_html=True)
+        st.markdown(f"**Slot {idx+1}**")
+        if fav:
+            st.code(f"{' '.join(map(str, fav))}")
+            fav_results = calculate_prizes(set(fav), df)
+            # 4th prize and above are ranks 1, 2, 3, 4
+            high_tier = [r for r in fav_results if r['Rank'] <= 4]
+            
+            latest_draw_set = {latest['n1'], latest['n2'], latest['n3'], latest['n4'], latest['n5'], latest['n6']}
+            latest_match = len(set(fav).intersection(latest_draw_set))
+            
+            st.markdown(f"Total Wins: **{len(fav_results)}**")
+            st.markdown(f"Major Wins (4th+): <span class='win-highlight'>{len(high_tier)}</span>", unsafe_allow_html=True)
+            
+            if high_tier:
+                dates = [r['Date'] for r in high_tier]
+                st.markdown(f"<div class='date-list'>Dates: {', '.join(dates)}</div>", unsafe_allow_html=True)
+            
+            if latest_match >= 3:
+                st.warning(f"🔔 Latest: {latest_match} matches!")
+            else:
+                st.write(f"Latest: {latest_match} matches")
+                
+            if st.button(f"Clear Slot {idx+1}", key=f"clear_{idx}", use_container_width=True):
+                st.session_state.fav_sets[idx] = None
+                st.rerun()
+        else:
+            st.info("Empty Slot")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+st.write("---")
+
+# --- 2. HISTORICAL PRIZE CHECKER ---
 header_col1, header_col2 = st.columns([5, 1])
 with header_col1:
     st.markdown("### 🔎 Historical Prize Checker")
@@ -134,63 +164,28 @@ for i in range(1, 50):
 selected_list = sorted(list(st.session_state.selected_nums))
 st.markdown(f"**Selected:** `{', '.join(map(str, selected_list)) if selected_list else 'None'}` ({len(selected_list)}/6)")
 
-# --- SAVE FAVORITES SECTION ---
 if len(selected_list) == 6:
-    st.write("💾 **Save this set as favorite:**")
+    st.write("💾 **Save to Favorites:**")
     save_cols = st.columns(3)
     for idx in range(3):
         with save_cols[idx]:
             if st.button(f"Save to Slot {idx+1}", key=f"save_{idx}", use_container_width=True):
                 st.session_state.fav_sets[idx] = selected_list
-                st.toast(f"Set {idx+1} saved!")
+                st.toast(f"Slot {idx+1} updated!")
                 st.rerun()
 
-    # Results for currently selected set
     results = calculate_prizes(set(selected_list), df)
     if results:
-        st.success(f"🎉 Current selection has won **{len(results)}** times in history!")
-        st.dataframe(pd.DataFrame(results)[["Date", "Prize"]], use_container_width=True, hide_index=True)
+        st.success(f"🎉 Result found: **{len(results)}** wins in total")
+        # Order by Prize Rank (Rank 1 = 1st Prize, etc.)
+        results_df = pd.DataFrame(results).sort_values(by="Rank", ascending=True)
+        st.dataframe(results_df[["Date", "Prize"]], use_container_width=True, hide_index=True)
     else:
-        st.info("No historical wins found for this specific combination.")
+        st.info("No historical wins found for this set.")
 
 st.write("---")
 
-# --- FAVORITE SETS TRACKER ---
-st.markdown("### ⭐ Favorite Sets Tracker")
-fav_cols = st.columns(3)
-for idx, fav in enumerate(st.session_state.fav_sets):
-    with fav_cols[idx]:
-        st.markdown(f"**Slot {idx+1}**")
-        if fav:
-            st.code(f"{' '.join(map(str, fav))}")
-            # Analyze favorite
-            fav_results = calculate_prizes(set(fav), df)
-            # High-tier prizes (Rank 1-4: 1st, 2nd, 3rd, 4th)
-            high_tier = [r for r in fav_results if r['Rank'] <= 4]
-            
-            # Check latest draw win
-            latest_draw_set = {latest['n1'], latest['n2'], latest['n3'], latest['n4'], latest['n5'], latest['n6']}
-            latest_match = len(set(fav).intersection(latest_draw_set))
-            latest_extra = latest['extra'] in set(fav)
-            
-            st.markdown(f"Total Wins: **{len(fav_results)}**")
-            st.markdown(f"Major Wins (4th+): <span class='win-highlight'>{len(high_tier)}</span>", unsafe_allow_html=True)
-            
-            # Latest Draw Status
-            if latest_match >= 3:
-                st.warning(f"🔔 Latest Draw: {latest_match} matches!")
-            else:
-                st.write(f"Latest Draw: {latest_match} matches")
-                
-            if st.button(f"Clear Slot {idx+1}", key=f"clear_{idx}"):
-                st.session_state.fav_sets[idx] = None
-                st.rerun()
-        else:
-            st.info("Slot Empty")
-
-st.write("---")
-
-# --- ANALYSIS TABS ---
+# --- ANALYSIS TABS (BELOW) ---
 tab1, tab2, tab3 = st.tabs(["📊 Statistics", "📈 Trends", "🧠 AI Oracle"])
 
 with tab1:
