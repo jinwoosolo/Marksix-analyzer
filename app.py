@@ -27,11 +27,12 @@ st.markdown("""
     .stat-label { color: #888; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; }
     .favorite-card {
         background: rgba(255, 255, 255, 0.03);
-        padding: 15px; border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.1);
-        margin-bottom: 15px;
+        padding: 12px; border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.1);
+        margin-bottom: 5px;
     }
     .win-highlight { color: #FF6B35; font-weight: bold; font-size: 1.1em; }
-    .date-list { font-size: 0.85em; color: #aaa; margin-top: 5px; }
+    .date-list { font-size: 0.8em; color: #aaa; margin-top: 5px; line-height: 1.2; }
+    .section-header { margin-top: 0px; margin-bottom: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -79,13 +80,6 @@ except Exception as e:
     st.error(f"⚠️ Error loading data: {e}")
     st.stop()
 
-# --- SIDEBAR CONTROL PANEL ---
-with st.sidebar:
-    st.title("Control Panel")
-    window = st.slider("Statistics Window", 10, total_records, 100)
-    st.divider()
-    st.info(f"📊 Total Draws: {total_records}")
-
 # --- HEADER SECTION ---
 st.title("🎰 Mark Six AI Analyzer")
 latest = df.iloc[0]
@@ -99,19 +93,17 @@ with c2:
 with c3:
     st.markdown(f"<div class='metric-card'><span class='stat-label'>Special</span><br><span class='stat-val' style='color:#7FD1B9'>{int(latest['extra'])}</span></div>", unsafe_allow_html=True)
 
-# --- 1. FAVORITE SETS TRACKER (NOW FIRST) ---
-st.markdown("### ⭐ Favorite Sets Tracker")
+# --- 1. FAVORITE SETS TRACKER ---
+st.markdown("<h3 class='section-header'>⭐ Favorite Sets Tracker</h3>", unsafe_allow_html=True)
 fav_cols = st.columns(3)
 for idx, fav in enumerate(st.session_state.fav_sets):
     with fav_cols[idx]:
-        st.markdown(f"<div class='favorite-card'>", unsafe_allow_html=True)
-        st.markdown(f"**Slot {idx+1}**")
         if fav:
+            st.markdown(f"<div class='favorite-card'>", unsafe_allow_html=True)
+            st.markdown(f"**Slot {idx+1}**")
             st.code(f"{' '.join(map(str, fav))}")
             fav_results = calculate_prizes(set(fav), df)
-            # 4th prize and above are ranks 1, 2, 3, 4
             high_tier = [r for r in fav_results if r['Rank'] <= 4]
-            
             latest_draw_set = {latest['n1'], latest['n2'], latest['n3'], latest['n4'], latest['n5'], latest['n6']}
             latest_match = len(set(fav).intersection(latest_draw_set))
             
@@ -120,7 +112,7 @@ for idx, fav in enumerate(st.session_state.fav_sets):
             
             if high_tier:
                 dates = [r['Date'] for r in high_tier]
-                st.markdown(f"<div class='date-list'>Dates: {', '.join(dates)}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div class='date-list'><b>Major Dates:</b><br>{', '.join(dates)}</div>", unsafe_allow_html=True)
             
             if latest_match >= 3:
                 st.warning(f"🔔 Latest: {latest_match} matches!")
@@ -130,16 +122,15 @@ for idx, fav in enumerate(st.session_state.fav_sets):
             if st.button(f"Clear Slot {idx+1}", key=f"clear_{idx}", use_container_width=True):
                 st.session_state.fav_sets[idx] = None
                 st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
         else:
-            st.info("Empty Slot")
-        st.markdown("</div>", unsafe_allow_html=True)
-
-st.write("---")
+            st.info(f"Slot {idx+1} Empty")
 
 # --- 2. HISTORICAL PRIZE CHECKER ---
+st.write("---")
 header_col1, header_col2 = st.columns([5, 1])
 with header_col1:
-    st.markdown("### 🔎 Historical Prize Checker")
+    st.markdown("<h3 class='section-header'>🔎 Historical Prize Checker</h3>", unsafe_allow_html=True)
 with header_col2:
     if st.button("Reset Selection", use_container_width=True):
         st.session_state.selected_nums = set()
@@ -148,12 +139,11 @@ with header_col2:
 st.write("Click numbers to select your 6-number combination.")
 
 # Grid UI
-cols = st.columns(7)
+grid_cols = st.columns(7)
 for i in range(1, 50):
-    with cols[(i-1) % 7]:
+    with grid_cols[(i-1) % 7]:
         is_selected = i in st.session_state.selected_nums
-        btn_label = f"{i:02d}"
-        if st.button(btn_label, key=f"btn_{i}", use_container_width=True, 
+        if st.button(f"{i:02d}", key=f"btn_{i}", use_container_width=True, 
                      type="primary" if is_selected else "secondary"):
             if i in st.session_state.selected_nums:
                 st.session_state.selected_nums.remove(i)
@@ -183,9 +173,14 @@ if len(selected_list) == 6:
     else:
         st.info("No historical wins found for this set.")
 
+# --- ANALYSIS TABS (SIDEBAR-CONTROLLED) ---
 st.write("---")
+with st.sidebar:
+    st.title("Control Panel")
+    window = st.slider("Statistics Window", 10, total_records, 100)
+    st.divider()
+    st.info(f"📊 Total Draws: {total_records}")
 
-# --- ANALYSIS TABS (BELOW) ---
 tab1, tab2, tab3 = st.tabs(["📊 Statistics", "📈 Trends", "🧠 AI Oracle"])
 
 with tab1:
