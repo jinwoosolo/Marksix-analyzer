@@ -33,13 +33,15 @@ jobs:
         run: |
           git config --global user.name "GitHub Action"
           git config --global user.email "action@github.com"
-          git add marksix.csv
           
-          git pull --rebase origin main
-          
-          if git diff --staged --quiet; then
+          # 檢查 marksix.csv 是否有變動
+          if git diff --quiet marksix.csv; then
             echo "沒有新數據可更新。"
           else
+            git add marksix.csv
             git commit -m "自動更新數據: $(date +'%Y-%m-%d')"
+            
+            # 先拉取遠端變動並合併，確保推送成功
+            git pull --rebase origin main
             git push origin main
           fi
