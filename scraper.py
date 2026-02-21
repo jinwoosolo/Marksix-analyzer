@@ -7,7 +7,7 @@ import time
 from urllib.parse import urljoin
 from datetime import datetime
 
-# 配置與 Header
+# 基本配置
 BASE_URL = "https://lottery.hk"
 RESULTS_URL = "https://www.lottery.hk/en/mark-six/results"
 headers = {
@@ -15,30 +15,21 @@ headers = {
 }
 
 def parse_draw_page(html, url):
-    """使用你提供的高級解析邏輯，確保抓到號碼"""
+    """採用你提供的高級解析邏輯，確保精確抓取 n1-n6 + extra"""
     if not html:
         return {}
 
     soup = BeautifulSoup(html, "lxml")
     data = {"url": url}
 
-    # 從 URL 提取日期
+    # 1. 從 URL 提取日期 (格式: 2026-02-21)
     date_match = re.search(r"(\d{4}-\d{2}-\d{2})", url)
     if date_match:
         data["date"] = date_match.group(1).replace("-", "/")
-    else:
-        # 如果 URL 沒日期，嘗試從頁面內容找
-        content = soup.get_text()
-        d_match = re.search(r'(\d{1,2})\s+([A-Z][a-z]+)\s+(\d{4})', content)
-        if d_match:
-            # 簡單處理日期 (scraper 不需要處理 2002 年歷史，只處理最新)
-            try:
-                dt = datetime.strptime(d_match.group(0), '%d %B %Y')
-                data["date"] = dt.strftime('%Y/%m/%d')
-            except: pass
-
-    # --- 策略 1：掃描所有數字元素 ---
+    
+    # 2. 策略：掃描所有數字元素 (你提供的核心邏輯)
     all_numbers = []
+    # 增加了選擇器精確度
     selectors = ["li", "span", "div[class*='ball']", "div[class*='number']", ".result-numbers"]
     for selector in selectors:
         for elem in soup.select(selector):
@@ -48,7 +39,7 @@ def parse_draw_page(html, url):
                 if 1 <= n <= 49:
                     all_numbers.append(n)
 
-    # 去重
+    # 去重並保持順序
     seen = set()
     unique_ordered = []
     for n in all_numbers:
@@ -56,6 +47,7 @@ def parse_draw_page(html, url):
             seen.add(n)
             unique_ordered.append(n)
 
+    # 如果有 7 個或以上號碼，取前 6 個為正獎，第 7 個為特別獎
     if len(unique_ordered) >= 7:
         main = unique_ordered[:6]
         extra = unique_ordered[6]
@@ -65,26 +57,18 @@ def parse_draw_page(html, url):
             "extra": extra
         })
         print(f"✅ 解析成功: {main} + {extra}")
+        
+    # 如果解析不到日期，從頁面文本備份尋找
+    if "date" not in data:
+        full_text = soup.get_text()
+        d_match = re.search(r'(\d{1,2})\s+([A-Z][a-z]+)\s+(\d{4})', full_text)
+        if d_match:
+            try:
+                dt = datetime.strptime(d_match.group(0), '%d %B %Y')
+                data["date"] = dt.strftime('%Y/%m/%d')
+            except: pass
 
-    # --- 策略 2：Regex Fallback ---
-    if "n1" not in data:
-        full_text = re.sub(r'[^\w\s\d/+]', ' ', soup.get_text())
-        patterns = [
-            r'(\d{1,2})\s+(\d{1,2})\s+(\d{1,2})\s+(\d{1,2})\s+(\d{1,2})\s+(\d{1,2})\s*[\+\s]+(\d{1,2})',
-            r'(\d+)\D+(\d+)\D+(\d+)\D+(\d+)\D+(\d+)\D+(\d+)\D*\+\D*(\d+)'
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, full_text, re.I)
-            if match:
-                nums = [int(match.group(i)) for i in range(1, 8)]
-                data.update({
-                    "n1": nums[0], "n2": nums[1], "n3": nums[2],
-                    "n4": nums[3], "n5": nums[4], "n6": nums[5],
-                    "extra": nums[6]
-                })
-                break
-
-    # 獎金資訊 (選填)
+    # 獎金資訊
     full_text = soup.get_text()
     prize_match = re.search(r'1st.*?HK\$?([\d,]+).*?([\d.]+)', full_text, re.I | re.DOTALL)
     if prize_match:
@@ -97,9 +81,8 @@ def parse_draw_page(html, url):
     return data
 
 def update_marksix():
-    print(f"🚀 開始檢查更新: {datetime.now()}")
+    print(f"🚀 開始執行每日更新...")
     
-    # 1. 抓取主列表頁面
     try:
         resp = requests.get(RESULTS_URL, headers=headers, timeout=20)
         resp.raise_for_status()
@@ -107,52 +90,51 @@ def update_marksix():
     except Exception as e:
         print(f"❌ 無法連接首頁: {e}"); return
 
-    # 2. 找到最上面的第一期連結
+    # 找到最新一期的連結 (通常是結果頁的第一個結果連結)
     latest_link = None
     for a in soup.find_all("a", href=True):
-        if "/mark-six/results/20" in a["href"]: # 找包含年份的結果連結
+        if "/mark-six/results/20" in a["href"]:
             latest_link = urljoin(BASE_URL, a["href"])
             break
 
     if not latest_link:
-        print("❌ 找不到最新的開彩連結"); return
+        print("❌ 找不到最新的結果連結"); return
 
-    print(f"🔍 發現最新開彩頁面: {latest_link}")
+    print(f"🔍 最新一期頁面: {latest_link}")
 
-    # 3. 檢查日期是否已經在 CSV
     csv_path = 'marksix.csv'
     df = pd.read_csv(csv_path) if os.path.exists(csv_path) else pd.DataFrame()
     
+    # 檢查是否已存在
     date_in_url = re.search(r"(\d{4}-\d{2}-\d{2})", latest_link)
     if date_in_url:
         check_date = date_in_url.group(1).replace("-", "/")
         if not df.empty and check_date in df['date'].astype(str).values:
-            print(f"ℹ️ {check_date} 數據已存在，無需操作。")
+            print(f"ℹ️ 數據 {check_date} 已在 CSV 中，無需更新。")
             return
 
-    # 4. 抓取詳情頁並解析
+    # 抓取詳情頁
     try:
         detail_resp = requests.get(latest_link, headers=headers, timeout=20)
         rec = parse_draw_page(detail_resp.text, latest_link)
     except Exception as e:
-        print(f"❌ 抓取詳情頁失敗: {e}"); return
+        print(f"❌ 詳情頁抓取失敗: {e}"); return
 
     if rec.get("date") and rec.get("n1"):
-        # 再次確認日期
         if not df.empty and rec["date"] in df['date'].astype(str).values:
-            print(f"ℹ️ {rec['date']} 數據已在 CSV 中。")
+            print(f"ℹ️ 數據 {rec['date']} 已存在。")
             return
 
-        # 寫入 CSV
+        # 寫入
         new_row = pd.DataFrame([rec])
         df = pd.concat([df, new_row], ignore_index=True)
         # 排序
         df['dt'] = pd.to_datetime(df['date'], format='%Y/%m/%d')
         df = df.sort_values('dt', ascending=True).drop(columns=['dt'])
         df.to_csv(csv_path, index=False)
-        print(f"✅ 成功更新 CSV！日期: {rec['date']}")
+        print(f"✅ CSV 更新完成: {rec['date']}")
     else:
-        print("❌ 解析失敗，未能獲取完整數據。")
+        print("❌ 解析失敗，找不到有效號碼。")
 
 if __name__ == "__main__":
     update_marksix()
