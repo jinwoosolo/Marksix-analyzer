@@ -12,25 +12,47 @@ headers = {
 }
 
 def fetch_latest_marksix():
-    """採用廣域掃描邏輯，抓取頁面上第一組有效的六合彩結果"""
+    """精準版：只抓取網頁中第一個出現的開獎結果區塊"""
     try:
         print(f"🚀 開始抓取: {TARGET_URL}")
         resp = requests.get(TARGET_URL, headers=headers, timeout=20)
         resp.raise_for_status()
-        # 嘗試使用 lxml，如果環境沒有則退回 html.parser
+        
+        # 優先使用 lxml 提升解析穩定度
         try:
             soup = BeautifulSoup(resp.text, "lxml")
         except:
             soup = BeautifulSoup(resp.text, "html.parser")
         
-        # --- 步驟 1: 尋找日期 ---
-        # 遍歷頁面文本尋找第一個符合 DD Month YYYY 格式的日期
-        full_text = soup.get_text(separator=' ', strip=True)
+        # --- 步驟 1: 鎖定第一個結果容器 ---
+        # lottery.hk 的結構中，最新結果通常在第一個 .result-box 或第一個 .result-row
+        container = soup.find('div', class_='result-box')
+        if not container:
+            container = soup.find('tr', class_='result-row')
+        
+        # 如果找不到特定容器，我們縮小範圍至包含 "ball" 的第一個父級區塊
+        if not container:
+            first_ball = soup.find(class_=re.compile(r'ball|no-', re.I))
+            if first_ball:
+                container = first_ball.find_parent(['div', 'tr', 'li'])
+
+        if not container:
+            print("❌ 找不到最新的結果區塊"); return False
+
+        # --- 步驟 2: 只在該容器內搜尋日期 ---
+        # 這樣就不會抓到網頁下方或側邊欄的舊日期
+        container_text = container.get_text(separator=' ', strip=True)
         date_pattern = r'(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})'
-        date_match = re.search(date_pattern, full_text)
+        date_match = re.search(date_pattern, container_text)
         
         if not date_match:
-            print("❌ 在頁面上找不到任何日期數據"); return False
+            # 如果容器內沒找到，嘗試在容器之前的標題找 (有時日期在區塊上方)
+            prev_content = container.find_previous_sibling()
+            if prev_content:
+                date_match = re.search(date_pattern, prev_content.get_text())
+
+        if not date_match:
+            print("❌ 在目標區塊內找不到日期"); return False
             
         day, month_str, year = date_match.groups()
         months_map = {
@@ -42,31 +64,32 @@ def fetch_latest_marksix():
         m_code = months_map.get(month_str[:3].capitalize(), '01')
         formatted_date = f"{year}/{m_code}/{day.zfill(2)}"
         
-        # --- 步驟 2: 抓取號碼 ---
-        # 策略：尋找所有標籤，只要內容是 1-49 的數字且具有「球」的特徵
+        # --- 步驟 3: 抓取號碼 ---
         balls = []
-        # 尋找所有 <li>, <span>, <div>
-        for el in soup.find_all(['li', 'span', 'div']):
-            cls = str(el.get('class', ''))
+        # 只在該容器內找球
+        ball_elements = container.find_all(['span', 'li', 'div'], class_=re.compile(r'ball|no-|num|result', re.I))
+        
+        for el in ball_elements:
             txt = el.get_text(strip=True)
             if txt.isdigit():
                 val = int(txt)
-                # 判斷是否為號碼球：內容 1-49 且 class 包含 ball 或 no- 或 num
-                if 1 <= val <= 49 and re.search(r'ball|no-|num|result', cls, re.I):
-                    if len(balls) < 7: # 只要前 7 個
-                        # 避免抓到日期中的數字
-                        if val == int(day) and "date" in cls.lower():
-                            continue
-                        balls.append(val)
+                if 1 <= val <= 49 and val not in balls:
+                    balls.append(val)
         
-        # 如果標籤掃描失敗，改用正則在日期附近的文本提取數字
+        # 如果標籤掃描不到，使用 Regex 在該容器文本中分開抓取
         if len(balls) < 7:
-            # 找到日期後面的文本片段
-            after_date_text = full_text[date_match.end():date_match.end()+200]
-            nums_in_text = re.findall(r'\b\d{1,2}\b', after_date_text)
-            balls = [int(n) for n in nums_in_text if 1 <= int(n) <= 49][:7]
+            # 尋找所有 1-2 位數字，並排除日期中的數字
+            nums_in_text = re.findall(r'\b\d{1,2}\b', container_text)
+            balls = []
+            for n in nums_in_text:
+                n_int = int(n)
+                if 1 <= n_int <= 49 and n != day and n != year[2:]:
+                    if n_int not in balls:
+                        balls.append(n_int)
+            balls = balls[:7]
 
         if len(balls) >= 7:
+            # 前 6 個是正獎，第 7 個是特別號
             main_nums = balls[:6]
             extra_num = balls[6]
             
@@ -76,7 +99,7 @@ def fetch_latest_marksix():
             csv_path = 'marksix.csv'
             df = pd.read_csv(csv_path) if os.path.exists(csv_path) else pd.DataFrame()
 
-            # 轉為字串比較，避免重複紀錄
+            # 轉為字串比較，確保不會重複
             if df.empty or formatted_date not in df['date'].astype(str).values:
                 new_data = {
                     'date': formatted_date,
@@ -90,12 +113,12 @@ def fetch_latest_marksix():
                 df['dt'] = pd.to_datetime(df['date'], format='%Y/%m/%d')
                 df = df.sort_values('dt', ascending=True).drop(columns=['dt'])
                 df.to_csv(csv_path, index=False)
-                print(f"🎉 已成功更新 CSV 檔案！")
+                print(f"🎉 數據已更新至 marksix.csv")
                 return True
             else:
-                print(f"ℹ️ 日期 {formatted_date} 已存在，無需更新。")
+                print(f"ℹ️ 日期 {formatted_date} 已在 CSV 中，略過更新。")
         else:
-            print(f"❌ 號碼偵測不足 (只抓到 {len(balls)} 個): {balls}")
+            print(f"❌ 號碼抓取不足 (抓到 {len(balls)} 個): {balls}")
             
     except Exception as e:
         print(f"❌ 發生異常錯誤: {e}")
