@@ -4,137 +4,108 @@ import pandas as pd
 import re
 import os
 import time
-from urllib.parse import urljoin
 from datetime import datetime
 
-# 基本配置
-BASE_URL = "https://lottery.hk"
-RESULTS_URL = "https://www.lottery.hk/en/mark-six/results"
+# 配置
+TARGET_URL = "https://www.lottery.hk/en/mark-six/results"
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
-def parse_draw_page(html, url):
-    """採用你提供的高級解析邏輯，確保精確抓取 n1-n6 + extra"""
-    if not html:
-        return {}
-
-    soup = BeautifulSoup(html, "lxml")
-    data = {"url": url}
-
-    # 1. 從 URL 提取日期 (格式: 2026-02-21)
-    date_match = re.search(r"(\d{4}-\d{2}-\d{2})", url)
-    if date_match:
-        data["date"] = date_match.group(1).replace("-", "/")
-    
-    # 2. 策略：掃描所有數字元素 (你提供的核心邏輯)
-    all_numbers = []
-    # 增加了選擇器精確度
-    selectors = ["li", "span", "div[class*='ball']", "div[class*='number']", ".result-numbers"]
-    for selector in selectors:
-        for elem in soup.select(selector):
-            txt = elem.get_text(strip=True)
-            if txt.isdigit():
-                n = int(txt)
-                if 1 <= n <= 49:
-                    all_numbers.append(n)
-
-    # 去重並保持順序
-    seen = set()
-    unique_ordered = []
-    for n in all_numbers:
-        if n not in seen:
-            seen.add(n)
-            unique_ordered.append(n)
-
-    # 如果有 7 個或以上號碼，取前 6 個為正獎，第 7 個為特別獎
-    if len(unique_ordered) >= 7:
-        main = unique_ordered[:6]
-        extra = unique_ordered[6]
-        data.update({
-            "n1": main[0], "n2": main[1], "n3": main[2],
-            "n4": main[3], "n5": main[4], "n6": main[5],
-            "extra": extra
-        })
-        print(f"✅ 解析成功: {main} + {extra}")
-        
-    # 如果解析不到日期，從頁面文本備份尋找
-    if "date" not in data:
-        full_text = soup.get_text()
-        d_match = re.search(r'(\d{1,2})\s+([A-Z][a-z]+)\s+(\d{4})', full_text)
-        if d_match:
-            try:
-                dt = datetime.strptime(d_match.group(0), '%d %B %Y')
-                data["date"] = dt.strftime('%Y/%m/%d')
-            except: pass
-
-    # 獎金資訊
-    full_text = soup.get_text()
-    prize_match = re.search(r'1st.*?HK\$?([\d,]+).*?([\d.]+)', full_text, re.I | re.DOTALL)
-    if prize_match:
-        data["div1_prize"] = prize_match.group(1)
-        data["div1_winners"] = prize_match.group(2)
-    else:
-        data["div1_prize"] = "TBA"
-        data["div1_winners"] = 0
-
-    return data
-
-def update_marksix():
-    print(f"🚀 開始執行每日更新...")
-    
+def fetch_latest_marksix():
+    """精確抓取 lottery.hk 最頂端的第一個結果"""
     try:
-        resp = requests.get(RESULTS_URL, headers=headers, timeout=20)
+        print(f"🚀 開始抓取: {TARGET_URL}")
+        resp = requests.get(TARGET_URL, headers=headers, timeout=20)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "lxml")
+        
+        # 1. 鎖定第一個結果容器 (這是關鍵，避免抓到下方的歷史紀錄)
+        # lottery.hk 的最新結果通常在第一個 .result-box 或 table 的第一行
+        latest_box = soup.find('div', class_='result-box')
+        if not latest_box:
+            # 備選方案：抓取表格的第一列
+            latest_box = soup.find('tr', class_='result-row')
+        
+        if not latest_box:
+            # 最後手段：掃描第一個包含號碼球的區域
+            latest_box = soup.find('ul', class_='results-list')
+            if latest_box:
+                latest_box = latest_box.find_parent('div')
+
+        if not latest_box:
+            print("❌ 找不到結果容器"); return False
+
+        # 2. 抓取日期 (精確從該容器抓取)
+        date_text = latest_box.get_text(separator=' ', strip=True)
+        # 尋找格式如: 21 February 2026
+        date_match = re.search(r'(\d{1,2})\s+([A-Z][a-z]+)\s+(\d{4})', date_text)
+        
+        if not date_match:
+            print("❌ 找不到日期數據"); return False
+            
+        day, month_str, year = date_match.groups()
+        months_map = {
+            'Jan': '01', 'Feb': '02', 'Mar': '03', 'Apr': '04', 'May': '05', 'Jun': '06',
+            'Jul': '07', 'Aug': '08', 'Sep': '09', 'Oct': '10', 'Nov': '11', 'Dec': '12',
+            'January': '01', 'February': '02', 'March': '03', 'April': '04', 'May': '05', 'June': '06',
+            'July': '07', 'August': '08', 'September': '09', 'October': '10', 'November': '11', 'December': '12'
+        }
+        m_code = months_map.get(month_str[:3].capitalize(), '01')
+        formatted_date = f"{year}/{m_code}/{day.zfill(2)}"
+        
+        # 3. 抓取號碼 (只從該容器內找球)
+        balls = []
+        # 尋找容器內所有的號碼元素
+        ball_elements = latest_box.find_all(['span', 'li', 'div'], class_=re.compile(r'ball|no-|num', re.I))
+        
+        for el in ball_elements:
+            txt = el.get_text(strip=True)
+            if txt.isdigit():
+                val = int(txt)
+                if 1 <= val <= 49 and val not in balls:
+                    balls.append(val)
+        
+        # 如果標籤法失敗，再用正則分開提取
+        if len(balls) < 7:
+            # 透過尋找獨立的 1-2 位數字來避免黏在一起
+            potential = re.findall(r'\b\d{1,2}\b', date_text)
+            # 排除掉日期中的數字 (year, day)
+            filtered = [int(n) for n in potential if 1 <= int(n) <= 49 and n != day and n != year]
+            balls = filtered[:7]
+
+        if len(balls) >= 7:
+            main_nums = balls[:6]
+            extra_num = balls[6]
+            
+            print(f"✅ 偵測到日期: {formatted_date}")
+            print(f"✅ 偵測到號碼: {main_nums} + {extra_num}")
+
+            csv_path = 'marksix.csv'
+            df = pd.read_csv(csv_path) if os.path.exists(csv_path) else pd.DataFrame()
+
+            if formatted_date not in df['date'].astype(str).values:
+                new_data = {
+                    'date': formatted_date,
+                    'n1': main_nums[0], 'n2': main_nums[1], 'n3': main_nums[2],
+                    'n4': main_nums[3], 'n5': main_nums[4], 'n6': main_nums[5],
+                    'extra': extra_num, 'div1_prize': 'TBA', 'div1_winners': 0, 
+                    'url': TARGET_URL
+                }
+                df = pd.concat([df, pd.DataFrame([new_data])], ignore_index=True)
+                df['dt'] = pd.to_datetime(df['date'], format='%Y/%m/%d')
+                df = df.sort_values('dt').drop(columns=['dt'])
+                df.to_csv(csv_path, index=False)
+                print(f"🚀 CSV 已更新: {formatted_date}")
+                return True
+            else:
+                print(f"ℹ️ {formatted_date} 數據已存在。")
+        else:
+            print(f"❌ 號碼不足 (抓到 {len(balls)} 個): {balls}")
+            
     except Exception as e:
-        print(f"❌ 無法連接首頁: {e}"); return
-
-    # 找到最新一期的連結 (通常是結果頁的第一個結果連結)
-    latest_link = None
-    for a in soup.find_all("a", href=True):
-        if "/mark-six/results/20" in a["href"]:
-            latest_link = urljoin(BASE_URL, a["href"])
-            break
-
-    if not latest_link:
-        print("❌ 找不到最新的結果連結"); return
-
-    print(f"🔍 最新一期頁面: {latest_link}")
-
-    csv_path = 'marksix.csv'
-    df = pd.read_csv(csv_path) if os.path.exists(csv_path) else pd.DataFrame()
-    
-    # 檢查是否已存在
-    date_in_url = re.search(r"(\d{4}-\d{2}-\d{2})", latest_link)
-    if date_in_url:
-        check_date = date_in_url.group(1).replace("-", "/")
-        if not df.empty and check_date in df['date'].astype(str).values:
-            print(f"ℹ️ 數據 {check_date} 已在 CSV 中，無需更新。")
-            return
-
-    # 抓取詳情頁
-    try:
-        detail_resp = requests.get(latest_link, headers=headers, timeout=20)
-        rec = parse_draw_page(detail_resp.text, latest_link)
-    except Exception as e:
-        print(f"❌ 詳情頁抓取失敗: {e}"); return
-
-    if rec.get("date") and rec.get("n1"):
-        if not df.empty and rec["date"] in df['date'].astype(str).values:
-            print(f"ℹ️ 數據 {rec['date']} 已存在。")
-            return
-
-        # 寫入
-        new_row = pd.DataFrame([rec])
-        df = pd.concat([df, new_row], ignore_index=True)
-        # 排序
-        df['dt'] = pd.to_datetime(df['date'], format='%Y/%m/%d')
-        df = df.sort_values('dt', ascending=True).drop(columns=['dt'])
-        df.to_csv(csv_path, index=False)
-        print(f"✅ CSV 更新完成: {rec['date']}")
-    else:
-        print("❌ 解析失敗，找不到有效號碼。")
+        print(f"❌ 發生錯誤: {e}")
+    return False
 
 if __name__ == "__main__":
-    update_marksix()
+    fetch_latest_marksix()
