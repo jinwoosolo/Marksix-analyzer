@@ -15,7 +15,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # 獲取完整歷史以利合併
+          fetch-depth: 0 
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -23,7 +23,8 @@ jobs:
           python-version: '3.10'
 
       - name: Install dependencies
-        run: pip install requests beautifulsoup4 pandas
+        run: |
+          pip install requests beautifulsoup4 pandas lxml
 
       - name: Run Scraper
         run: python scraper.py
@@ -34,7 +35,6 @@ jobs:
           git config --global user.email "action@github.com"
           git add marksix.csv
           
-          # 先拉取並合併遠端變動，避免推送被拒絕
           git pull --rebase origin main
           
           if git diff --staged --quiet; then
