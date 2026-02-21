@@ -5,4 +5,6 @@ numpy
 prophet
 plotly-resampler
 cmdstanpy
-google-cloud-firestore
+beautifulsoup4
+requests
+lxml
