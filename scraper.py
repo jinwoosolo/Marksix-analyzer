@@ -15,7 +15,7 @@ headers = {
 }
 
 def parse_draw_page(html, url):
-    """精確解析詳情頁面，排除標題干擾"""
+    """精確解析詳情頁面，排除標題與日期數字的干擾"""
     if not html:
         return {}
 
@@ -31,73 +31,71 @@ def parse_draw_page(html, url):
     formatted_date = raw_date.replace("-", "/")
     data["date"] = formatted_date
     
-    # 提取日期的部分數字，用來做過濾 (例如 21, 02, 2026)
-    date_parts = set(re.findall(r"\d+", raw_date))
-
-    # 2. 策略：尋找真正的號碼球容器
-    # 在 lottery.hk 詳情頁，號碼通常在一個 class 包含 'balls' 或 'result-box' 的容器內
+    # 2. 策略：尋找真正的號碼球
+    # lottery.hk 詳情頁中，真正的號碼通常在一個特定的 <ul> 內
+    # 我們尋找 class 包含 'balls' 或 'mark-six-result' 的區域
     balls = []
     
-    # 優先尋找結果列表標籤
-    ball_container = soup.find(['ul', 'div'], class_=re.compile(r'ball|result-numbers|results-list', re.I))
+    # 搜尋特定的號碼列表
+    # 優先尋找 class 包含 'balls' 的 <ul> 或 <div>
+    target_area = soup.find(['ul', 'div'], class_=re.compile(r'balls|result-box|draw-results', re.I))
     
-    if ball_container:
-        # 尋找容器內的數字
-        for el in ball_container.find_all(['li', 'span', 'div']):
+    if not target_area:
+        # 如果找不到特定區域，搜尋第一個具有多個球的容器
+        for container in soup.find_all(['ul', 'div']):
+            ball_elements = container.find_all(['li', 'span'], class_=re.compile(r'ball|no-', re.I))
+            if len(ball_elements) >= 7:
+                target_area = container
+                break
+
+    if target_area:
+        # 在目標區域內抓取號碼
+        for el in target_area.find_all(['li', 'span', 'div']):
             txt = el.get_text(strip=True)
             cls = "".join(el.get('class', []))
-            # 號碼球通常內容是數字，且 class 包含 ball 或 no-
+            
+            # 號碼球特徵：是純數字，且 class 包含 'ball' 或 'no-' (代表號碼球圖示)
             if txt.isdigit() and re.search(r'ball|no-|num', cls, re.I):
                 val = int(txt)
                 if 1 <= val <= 49:
                     balls.append(val)
+        
+        # 去重（有些結構會重複渲染）
+        unique_balls = []
+        for b in balls:
+            if b not in unique_balls:
+                unique_balls.append(b)
+        balls = unique_balls
 
-    # 3. 如果沒抓到，使用備選方案（掃描全頁但過濾干擾）
+    # 3. 備選方案：如果標籤識別不到，但頁面有 7 個以上的球狀物
     if len(balls) < 7:
-        temp_balls = []
-        # 尋找所有可能是球的元素
-        for el in soup.find_all(['span', 'li', 'div'], class_=re.compile(r'ball|no-|num', re.I)):
+        # 直接搜尋全頁所有帶球樣式的號碼
+        fallback_balls = []
+        for el in soup.find_all(['li', 'span'], class_=re.compile(r'ball|no-', re.I)):
             txt = el.get_text(strip=True)
             if txt.isdigit():
                 val = int(txt)
-                # 過濾邏輯：排除掉出現在 URL/標題中的日期數字和期數數字
-                # 期數通常也會出現在文本中，這裡假設號碼球在頁面中後段
                 if 1 <= val <= 49:
-                    temp_balls.append(val)
+                    fallback_balls.append(val)
         
-        # 排除重複並保持順序
-        unique_balls = []
-        for b in temp_balls:
-            if b not in unique_balls:
-                unique_balls.append(b)
-        
-        # 如果數字過多，通常真正的號碼球會排在一起
-        # 我們尋找連續出現的 7 個號碼
-        if len(unique_balls) >= 7:
-            # 觀察發現標題數字通常在最前面，我們從後面開始取可能是正確的，
-            # 但更好的方法是找特定的父容器
-            balls = unique_balls[-7:]
+        # 排除掉頁面上可能重複的歷史紀錄（通常前 7 個是本期結果）
+        if len(fallback_balls) >= 7:
+            # 詳情頁中最顯眼的號碼通常就是結果
+            balls = fallback_balls[:7]
 
     if len(balls) >= 7:
-        # 為了確保萬一抓到前面的期數，我們做最後檢查
-        # 如果前幾個數字剛好是年份或日期，則往後移
-        if len(balls) > 7:
-            # 排除掉跟日期太像的數字
-            balls = [b for b in balls if str(b) not in date_parts]
-        
-        if len(balls) >= 7:
-            # 取最後 7 個通常是最準確的號碼球
-            res_balls = balls[-7:]
-            main = res_balls[:6]
-            extra = res_balls[6]
-            data.update({
-                "n1": main[0], "n2": main[1], "n3": main[2],
-                "n4": main[3], "n5": main[4], "n6": main[5],
-                "extra": extra
-            })
-            print(f"✅ 成功提取號碼: {main} + {extra}")
-        else:
-            print(f"❌ 號碼過濾後不足: {balls}")
+        # 確保我們拿到的是本期的 6+1
+        main = balls[:6]
+        extra = balls[6]
+        data.update({
+            "n1": main[0], "n2": main[1], "n3": main[2],
+            "n4": main[3], "n5": main[4], "n6": main[5],
+            "extra": extra
+        })
+        print(f"✅ 成功提取號碼: {main} + {extra}")
+    else:
+        # 如果最後還是失敗，印出當前抓到的東西輔助除錯
+        print(f"⚠️ 解析警告: 偵測到數字不足 ({len(balls)} 個): {balls}")
 
     # 獎金資訊
     full_text = soup.get_text()
@@ -108,13 +106,13 @@ def parse_draw_page(html, url):
     return data
 
 def update_marksix():
-    print(f"🚀 啟動自動更新程序...")
+    print(f"🚀 啟動自動更新程序 (Target: lottery.hk)...")
     try:
         resp = requests.get(RESULTS_LIST_URL, headers=headers, timeout=20)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "lxml")
         
-        # 找到最新一期的連結
+        # 1. 找到最新一期的連結 (第一個符合日期的連結)
         latest_link = None
         for a in soup.find_all("a", href=True):
             href = a["href"]
@@ -127,7 +125,7 @@ def update_marksix():
 
         print(f"🔍 進入最新期數頁面: {latest_link}")
         
-        # 檢查是否已存在
+        # 2. 檢查 CSV 是否已存在該日期
         csv_path = 'marksix.csv'
         df = pd.read_csv(csv_path) if os.path.exists(csv_path) else pd.DataFrame()
         
@@ -138,20 +136,21 @@ def update_marksix():
                 print(f"ℹ️ 日期 {target_date} 已在 CSV 中，略過更新。")
                 return
 
-        # 抓取並解析
-        time.sleep(1)
+        # 3. 抓取並解析
+        time.sleep(1.5) # 增加延遲，確保頁面加載
         detail_resp = requests.get(latest_link, headers=headers, timeout=20)
         rec = parse_draw_page(detail_resp.text, latest_link)
 
-        if rec.get("n1"):
+        if rec.get("n1") and rec.get("extra"):
             new_row = pd.DataFrame([rec])
             df = pd.concat([df, new_row], ignore_index=True)
+            # 確保日期格式一致並排序
             df['dt'] = pd.to_datetime(df['date'], format='%Y/%m/%d')
             df = df.sort_values('dt', ascending=True).drop(columns=['dt'])
             df.to_csv(csv_path, index=False)
-            print(f"🎉 數據更新成功: {rec['date']}")
+            print(f"🎉 數據更新成功: {rec['date']} | {rec['n1']},{rec['n2']},{rec['n3']},{rec['n4']},{rec['n5']},{rec['n6']} + {rec['extra']}")
         else:
-            print("❌ 號碼解析失敗。")
+            print("❌ 號碼解析失敗，未找到完整的 6+1 號碼。")
             
     except Exception as e:
         print(f"❌ 發生錯誤: {e}")
