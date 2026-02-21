@@ -34,14 +34,16 @@ jobs:
           git config --global user.name "GitHub Action"
           git config --global user.email "action@github.com"
           
-          # 檢查 marksix.csv 是否有變動
+          # 檢查是否有變動
           if git diff --quiet marksix.csv; then
             echo "沒有新數據可更新。"
           else
             git add marksix.csv
+            # 先 commit 本地變動
             git commit -m "自動更新數據: $(date +'%Y-%m-%d')"
             
-            # 先拉取遠端變動並合併，確保推送成功
-            git pull --rebase origin main
+            # 再處理遠端可能的衝突
+            git fetch origin main
+            git rebase origin/main
             git push origin main
           fi
