@@ -34,16 +34,18 @@ jobs:
           git config --global user.name "GitHub Action"
           git config --global user.email "action@github.com"
           
-          # 檢查是否有變動
+          # 1. 檢查 marksix.csv 是否真的有被修改
           if git diff --quiet marksix.csv; then
-            echo "沒有新數據可更新。"
+            echo "偵測結果：數據已是最新，無需 Commit。"
           else
+            # 2. 暫存變動並 Commit
             git add marksix.csv
-            # 先 commit 本地變動
-            git commit -m "自動更新數據: $(date +'%Y-%m-%d')"
+            git commit -m "自動更新六合彩數據: $(date +'%Y-%m-%d')"
             
-            # 再處理遠端可能的衝突
+            # 3. 關鍵：先拉取遠端最新代碼並執行 Rebase，解決衝突
             git fetch origin main
             git rebase origin/main
+            
+            # 4. 推送回 GitHub
             git push origin main
           fi
