@@ -154,8 +154,8 @@ with st.sidebar:
     st.title("⚙️ 控制面板")
     v_fav = st.checkbox("顯示組合追蹤", value=True)
     v_ai = st.checkbox("顯示 AI 預測與回測", value=True)
-    v_check = st.checkbox("顯示中獎檢查器", value=True)
-    v_chart = st.checkbox("顯示分析圖表", value=True)
+    v_check = st.checkbox("顯示中獎檢查器", value=False)
+    v_chart = st.checkbox("顯示分析圖表", value=False)
     st.divider()
     window = st.slider("預測參考窗口", 50, 500, 100)
 
