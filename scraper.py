@@ -16,7 +16,7 @@ headers = {
 
 def parse_draw_page(html, url):
     """
-    🔥 終極精確解析：徹底排除日期、年份及期數干擾
+    🔥 終極解析邏輯：利用 CSS 顏色類名精確定位號碼球 (r-ball, g-ball, b-ball)
     """
     if not html:
         return {}
@@ -24,71 +24,58 @@ def parse_draw_page(html, url):
     soup = BeautifulSoup(html, "lxml")
     data = {"url": url}
 
-    # 1. 提取日期並建立「黑名單數字」
+    # 1. 提取日期 (從 URL 提取)
     date_match = re.search(r"(\d{4})-(\d{2})-(\d{2})", url)
     if date_match:
-        year_full, month_raw, day_raw = date_match.groups()
-        data["date"] = f"{year_full}/{month_raw}/{day_raw}"
-        
-        # 黑名單：包含年份(2026)、日期(28)、月份(02)
-        # 同時包含年份後兩位(26)，因為這經常出現在期數編號中
-        blacklist = {
-            year_full, 
-            str(int(year_full[2:])), 
-            str(int(month_raw)), 
-            str(int(day_raw)),
-            "2026", "26", "28", "21" # 強制加入已知干擾項
-        }
+        year, month, day = date_match.groups()
+        data["date"] = f"{year}/{month}/{day}"
     else:
         return {}
 
-    print(f"   [Debug] 處理日期: {data.get('date')} | 排除清單: {blacklist}")
+    print(f"   [Debug] 處理日期: {data.get('date')}")
 
-    # 2. 鎖定結果表格區域
-    # 我們尋找包含號碼球的最核心容器
+    # 2. 定位結果核心區塊
+    # 我們鎖定包含 'ball' 類名且為數字的元素
+    # lottery.hk 的號碼球 class 通常包含 'r-ball' (紅), 'g-ball' (綠), 'b-ball' (藍)
     balls = []
     
-    # 策略 A: 優先抓取具有 'ball' 樣式的元素，但必須在結果容器內
-    # 這樣可以避開導航欄或頁尾的數字
-    content_area = soup.select_one(".result-numbers") or \
-                   soup.select_one(".balls") or \
-                   soup.select_one(".draw-results") or \
-                   soup.select_one(".result-box") or \
-                   soup.select_one("main")
-
-    if content_area:
-        # 尋找帶有 'ball' 類名的元素
-        ball_elements = content_area.find_all(['span', 'li', 'div'], class_=re.compile(r'ball|no-', re.I))
+    # 策略 A: 尋找所有帶有顏色球標籤的元素
+    # 這是最準確的方法，因為文字標題不會帶有顏色球樣式
+    ball_elements = soup.find_all(['span', 'li', 'div'], class_=re.compile(r'r-ball|g-ball|b-ball|ball', re.I))
+    
+    for el in ball_elements:
+        txt = el.get_text(strip=True)
+        if txt.isdigit():
+            val = int(txt)
+            if 1 <= val <= 49 and val not in balls:
+                balls.append(val)
+    
+    # 3. 策略 B: 如果標籤法沒抓到，嘗試鎖定特定的容器
+    if len(balls) < 7:
+        print("   [Debug] 標籤法未達標，嘗試容器定位...")
+        container = soup.select_one(".result-numbers") or \
+                    soup.select_one(".balls") or \
+                    soup.select_one(".draw-results")
         
-        candidates = []
-        for el in ball_elements:
-            txt = el.get_text(strip=True)
-            if txt.isdigit():
-                val_str = str(int(txt))
-                # 初步過濾：1-49 且不在黑名單中（除非黑名單數字本身就是中獎號碼）
-                # 注意：如果數字帶有明顯的球體類名 (如 r-ball)，即使在黑名單也應保留
-                cls = "".join(el.get('class', []))
-                is_real_ball = re.search(r'r-b|g-b|b-b|ball', cls, re.I)
-                
-                if 1 <= int(val_str) <= 49:
-                    if is_real_ball or val_str not in blacklist:
-                        candidates.append(int(val_str))
+        if container:
+            nums = container.find_all(['span', 'li', 'div'])
+            for n in nums:
+                t = n.get_text(strip=True)
+                if t.isdigit():
+                    v = int(t)
+                    if 1 <= v <= 49 and v not in balls:
+                        balls.append(v)
 
-        # 數據清洗：去重
-        for c in candidates:
-            if c not in balls:
-                balls.append(c)
-
-    # 3. 備援與二度檢查 (針對 28 號多出一個 28 的問題)
-    if len(balls) > 7:
-        # 如果抓到 8 個數字且第一個跟日期一樣，則它是誤抓
-        if str(balls[0]) == str(int(day_raw)):
-            print(f"   [Debug] 偵測到首位數字與日期重複 ({balls[0]})，執行修正位移。")
-            balls = balls[1:]
-
-    # 4. 數據分配 (取前 7 個有效數字)
+    # 4. 數據檢查與分開正獎/特別獎
+    # 詳情頁中，如果有 7 個球，前 6 個是正獎，最後一個是特別號
     if len(balls) >= 7:
-        res = balls[:7]
+        # 特別處理：如果抓到太多號碼，排除掉可能是日期或年份的數字
+        # 通常詳情頁中心區域的 7 個連續數字才是正確的
+        if len(balls) > 7:
+            # 只取前 7 個
+            balls = balls[:7]
+            
+        res = balls
         data.update({
             "n1": res[0], "n2": res[1], "n3": res[2],
             "n4": res[3], "n5": res[4], "n6": res[5],
@@ -98,7 +85,7 @@ def parse_draw_page(html, url):
     else:
         print(f"   ❌ 解析失敗，僅抓到: {balls}")
 
-    # 5. 獎金
+    # 5. 獎金提取
     full_text = soup.get_text()
     prize_match = re.search(r'1st.*?HK\$?([\d,]+)', full_text, re.I | re.DOTALL)
     data["div1_prize"] = prize_match.group(1).replace(',', '') if prize_match else "0"
@@ -129,7 +116,6 @@ def fetch_latest_marksix():
         soup = BeautifulSoup(resp.text, "lxml")
         
         draw_links = []
-        # 獲取近期所有連結
         for a in soup.find_all("a", href=True):
             href = a["href"]
             if "/mark-six/results/20" in href:
@@ -141,18 +127,17 @@ def fetch_latest_marksix():
                         if (date_val, full_url) not in draw_links:
                             draw_links.append((date_val, full_url))
         
-        # 每次最多補 5 筆
         draw_links = draw_links[:5]
 
         if not draw_links:
-            print("ℹ️ 所有數據已是最新。")
+            print("ℹ️ CSV 數據已是最新。")
             return True
             
         print(f"🔎 發現 {len(draw_links)} 筆需要補齊的數據...")
 
         new_records = []
         for missing_date, link in reversed(draw_links):
-            print(f"⏳ 正在處理: {missing_date} ...")
+            print(f"⏳ 正在處理詳情頁: {missing_date} ...")
             time.sleep(2) 
             try:
                 detail_resp = requests.get(link, headers=headers, timeout=20)
