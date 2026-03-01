@@ -16,7 +16,7 @@ headers = {
 
 def parse_draw_page(html, url):
     """
-    🔥 修正版解析邏輯：嚴格隔離「期數數字」與「號碼球數字」
+    🔥 修正版解析邏輯：智能識別球體區域，排除標題與期數數字
     """
     if not html:
         return {}
@@ -29,37 +29,47 @@ def parse_draw_page(html, url):
     if date_match:
         data["date"] = date_match.group(1).replace("-", "/")
     
-    # 2. 定位結果核心區塊
-    # 我們尋找 class 包含 'balls' 或 'draw-results' 的容器，這能有效避開左側的 Draw Number
+    # 2. 定位結果核心區塊 - 採用寬鬆但具備特徵的搜尋
+    # 我們搜尋頁面中包含最多 'ball' 字眼或數字圓圈的容器
     balls = []
     
-    # 優先鎖定專門存放號碼球的 <ul> 或 <div>
-    target_area = soup.select_one(".result-numbers") or \
-                  soup.select_one(".balls") or \
-                  soup.select_one(".results-list") or \
-                  soup.select_one(".draw-results")
+    # 找出所有可能的容器
+    containers = soup.find_all(['div', 'ul', 'table'], class_=re.compile(r'result|ball|draw|box', re.I))
     
-    if not target_area:
-        # 如果找不到特定容器，則搜尋 main 區域，但避開表格的第一欄 (通常是期數)
-        target_area = soup.select_one("main") or soup
+    best_container = None
+    max_balls = 0
+    
+    for container in containers:
+        # 測試該容器內有多少個數字球
+        test_balls = container.find_all(['li', 'span', 'div'], class_=re.compile(r'ball|no-|num', re.I))
+        count = len([b for b in test_balls if b.get_text(strip=True).isdigit()])
+        if count > max_balls:
+            max_balls = count
+            best_container = container
+            
+    if not best_container:
+        best_container = soup.find('main') or soup
 
-    # 3. 抓取號碼 - 嚴格限制：必須是具有「球體樣式」的元素
-    # 我們搜尋 class 包含 'ball' 的標籤，這樣就不會抓到普通文本裡的 '26/023'
-    ball_elements = target_area.find_all(['li', 'span', 'div'], class_=re.compile(r'ball|no-|num', re.I))
+    # 3. 抓取號碼 - 排除期數與雜訊
+    # 獲取頁面標題中的期數 (例如 26/023)，用來過濾誤抓
+    draw_no_match = re.search(r'(\d{2})/\d{3}', soup.get_text())
+    draw_no_prefix = draw_no_match.group(1) if draw_no_match else None
+
+    raw_elements = best_container.find_all(['li', 'span', 'div'], class_=re.compile(r'ball|no-|num', re.I))
     
     temp_balls = []
-    for el in ball_elements:
+    for el in raw_elements:
         txt = el.get_text(strip=True)
         if txt.isdigit():
             val = int(txt)
             if 1 <= val <= 49:
                 temp_balls.append(val)
     
-    # 4. 數據檢查與分開正獎/特別獎
-    # lottery.hk 詳情頁通常只有一組 7 個球。如果抓到多組，通常第一組是正確的。
+    # 4. 數據精煉：如果有超過 7 個數字且第一個數字等於期數前綴，則剔除它
+    if len(temp_balls) > 7 and draw_no_prefix and str(temp_balls[0]) == draw_no_prefix:
+        temp_balls = temp_balls[1:]
+    
     if len(temp_balls) >= 7:
-        # 再次檢查：如果第一個數字跟期數的前兩位(26)一樣，且位置可疑，我們檢查是否有多餘數字
-        # 但在詳情頁中，只要我們鎖定了 .balls 容器，就不應該抓到期數。
         balls = temp_balls[:7]
         main = balls[:6]
         extra = balls[6]
@@ -68,6 +78,7 @@ def parse_draw_page(html, url):
             "n4": main[3], "n5": main[4], "n6": main[5],
             "extra": extra
         })
+        print(f"   🎯 成功識別: {main} + {extra}")
     
     # 5. 獎金提取
     full_text = soup.get_text()
@@ -79,7 +90,7 @@ def parse_draw_page(html, url):
 
 def fetch_latest_marksix():
     """
-    主執行程序：自動補齊或修正 CSV 中缺失/錯誤的數據
+    主執行程序：自動補齊 CSV 中缺失的近期數據
     """
     print(f"\n{'='*60}")
     print(f"🚀 六合彩精確抓取器啟動: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -108,20 +119,22 @@ def fetch_latest_marksix():
                 match = re.search(r"(\d{4}-\d{2}-\d{2})", href)
                 if match:
                     date_val = match.group(1).replace("-", "/")
-                    # 如果日期不在 CSV，或者您想強制更新最近幾期，可以在這裡調整
                     if date_val not in existing_dates:
                         full_url = urljoin(BASE_URL, href)
                         draw_links.append((date_val, full_url))
+        
+        # 限制一次補回的數量，避免被封鎖
+        draw_links = draw_links[:5]
 
         if not draw_links:
             print("ℹ️ CSV 數據已是最新。")
             return True
             
-        print(f"🔎 發現 {len(draw_links)} 筆缺失或待修正數據。")
+        print(f"🔎 發現 {len(draw_links)} 筆缺失或需要更新的數據。")
 
         new_records = []
-        for missing_date, link in reversed(draw_links): # 從舊到新補
-            print(f"⏳ 正在精確抓取: {missing_date} ...")
+        for missing_date, link in reversed(draw_links): # 從舊日期開始補
+            print(f"⏳ 正在精確抓取詳情: {missing_date} ...")
             time.sleep(2) 
             try:
                 detail_resp = requests.get(link, headers=headers, timeout=20)
@@ -129,9 +142,8 @@ def fetch_latest_marksix():
                     rec = parse_draw_page(detail_resp.text, link)
                     if rec.get("n1"):
                         new_records.append(rec)
-                        print(f"   ✅ 成功抓取: {rec['n1']}, {rec['n2']}, {rec['n3']}, {rec['n4']}, {rec['n5']}, {rec['n6']} + {rec['extra']}")
                     else:
-                        print(f"   ⚠️ 解析失敗。")
+                        print(f"   ⚠️ 解析失敗，跳過此日期。")
             except Exception as e:
                 print(f"   ❌ 抓取錯誤: {e}")
 
