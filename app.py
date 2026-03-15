@@ -6,8 +6,9 @@ from prophet import Prophet
 from collections import Counter
 import datetime
 import numpy as np
+import os
 
-# --- APP 配置 ---
+# --- 1. APP 頁面配置 ---
 st.set_page_config(page_title="六合彩 AI 專業分析器 Pro", page_icon="🎰", layout="wide")
 
 # 專業介面 CSS 樣式
@@ -35,6 +36,7 @@ st.markdown("""
     .ai-box { background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 107, 53, 0.3); border-radius: 15px; padding: 20px; margin-bottom: 20px; }
     .history-card { background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.05); padding: 15px; border-radius: 10px; margin-bottom: 10px; }
     .match-tag { background: #FF6B35; color: white; padding: 2px 8px; border-radius: 4px; font-weight: bold; }
+    .missing-tag { background: #444; color: #aaa; padding: 2px 8px; border-radius: 4px; font-size: 0.9em; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -48,79 +50,95 @@ FIXED_FAV_SETS = [
 # --- 核心數據邏輯 ---
 @st.cache_data(ttl=3600)
 def load_data():
+    """載入數據並執行基本的清理，確保數值正確並防禦損壞數據"""
+    if not os.path.exists('marksix.csv'):
+        return pd.DataFrame(), np.array([]), np.array([]), np.array([])
+        
     df = pd.read_csv('marksix.csv')
+    
+    # 數據過濾：確保日期格式正確且號碼列為有效數字
+    df = df[df['date'].astype(str).str.len() <= 12] 
+    num_cols_all = ['n1', 'n2', 'n3', 'n4', 'n5', 'n6', 'extra']
+    for col in num_cols_all:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    df = df.dropna(subset=num_cols_all)
+    df = df[df[num_cols_all].apply(lambda x: x.between(1, 49)).all(axis=1)]
+    
+    # 轉換日期
     df['date_parsed'] = pd.to_datetime(df['date'], format='mixed')
     df = df.sort_values('date_parsed', ascending=True).reset_index(drop=True)
+    
     draws_matrix = df[['n1', 'n2', 'n3', 'n4', 'n5', 'n6']].values
     extras_array = df['extra'].values
     dates_array = df['date'].values
     return df, draws_matrix, extras_array, dates_array
 
-def calculate_ai_scores(historical_df, window_size=100):
-    """根據頻率與遺漏值計算每個號碼的綜合機率得分，並按得分排序"""
+def calculate_ai_scores(historical_df, window_size=100, top_n=12):
+    """根據頻率與遺漏值計算號碼綜合機率得分，並返回前 N 個號碼及其餘號碼"""
     recent_data = historical_df.tail(window_size)
+    if recent_data.empty:
+        full_list = list(range(1, 50))
+        return full_list[:top_n], full_list[top_n:]
+        
     nums = recent_data[['n1', 'n2', 'n3', 'n4', 'n5', 'n6']].values.flatten()
     counts = Counter(nums)
     scores = {}
     total_draws = len(recent_data)
+    
     for n in range(1, 50):
-        # 1. 頻率權重 (佔 60%)
         freq = counts.get(n, 0)
-        freq_score = (freq / (total_draws * 6 / 49)) * 60 
+        freq_score = (freq / (total_draws * 6 / 49 + 0.001)) * 60 
         
-        # 2. 遺漏權重 (佔 40%) - 越久沒開代表回歸機率調整
         last_appearance = 0
         for i, draw in enumerate(reversed(recent_data[['n1', 'n2', 'n3', 'n4', 'n5', 'n6']].values)):
             if n in draw:
                 last_appearance = i
                 break
-        gap_score = (last_appearance / 20) * 40 # 假設 20 期為一個觀察週期
-        
+        gap_score = (last_appearance / 20) * 40
         scores[n] = freq_score + gap_score
         
-    # 按得分由高到低排列（最大機會開出的數字排在前面）
     ranked_nums = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    return [int(x[0]) for x in ranked_nums[:12]]
+    top_list = [int(x[0]) for x in ranked_nums[:top_n]]
+    remaining_list = [int(x[0]) for x in ranked_nums[top_n:]]
+    return top_list, remaining_list
 
 @st.cache_data(show_spinner=False)
-def get_historical_backtest(limit=100):
-    """回測最近 100 期的 AI 表現"""
+def get_historical_backtest(limit=100, top_n=12):
+    """回測最近期的 AI 表現"""
     df_asc, draws_np, extras_np, dates_np = load_data()
     results = []
-    
-    # 從最後一期往回推
+    if df_asc.empty: return []
     total = len(df_asc)
-    start_idx = total - limit
+    start_idx = max(50, total - limit)
     
     for i in range(total - 1, start_idx - 1, -1):
-        if i < 50: continue 
-        
-        # 模擬當時預測：只看當期之前的數據
         past_df = df_asc.iloc[:i]
         target_draw = set(draws_np[i])
         target_extra = int(extras_np[i])
         
-        # AI 預測（按得分降序排）
-        ai_12 = calculate_ai_scores(past_df, window_size=100)
+        # AI 預測
+        ai_top, ai_remain = calculate_ai_scores(past_df, window_size=100, top_n=top_n)
         
-        # 命中計算 (包含特別號)
-        matched_nums = [n for n in ai_12 if n in target_draw]
-        matched_extra = target_extra in ai_12
-        match_count = len(matched_nums) + (1 if matched_extra else 0)
+        draw_all = list(target_draw) + [target_extra]
+        matched_nums = [n for n in ai_top if n in draw_all]
+        match_count = len(matched_nums)
         
         results.append({
             "date": dates_np[i],
             "draw_nums": sorted(list(target_draw)),
             "extra": target_extra,
-            "prediction": ai_12, # 這是按機率排的
+            "prediction": ai_top,
+            "missing": sorted(ai_remain),
             "match_count": match_count,
-            "matched_list": matched_nums + ([target_extra] if matched_extra else [])
+            "matched_list": matched_nums
         })
     return results
 
 @st.cache_data(show_spinner=False)
 def get_all_historical_wins_fast(user_set_tuple, total_count):
-    _, draws, extras, dates = load_data()
+    df, draws, extras, dates = load_data()
+    if df.empty: return []
     user_set = set(user_set_tuple)
     results = []
     for i in range(len(draws)):
@@ -141,9 +159,14 @@ def get_all_historical_wins_fast(user_set_tuple, total_count):
 # --- 執行載入 ---
 try:
     df_asc, draws_np, extras_np, dates_np = load_data()
-    df_desc = df_asc.sort_values('date_parsed', ascending=False).reset_index(drop=True)
-    total_records = len(df_asc)
-    num_cols = ['n1', 'n2', 'n3', 'n4', 'n5', 'n6']
+    if not df_asc.empty:
+        df_desc = df_asc.sort_values('date_parsed', ascending=False).reset_index(drop=True)
+        total_records = len(df_asc)
+        num_cols = ['n1', 'n2', 'n3', 'n4', 'n5', 'n6']
+        latest = df_desc.iloc[0]
+    else:
+        st.warning("尚未偵測到 marksix.csv 數據。")
+        st.stop()
 except Exception as e:
     st.error(f"數據載入出錯: {e}"); st.stop()
 
@@ -154,13 +177,12 @@ with st.sidebar:
     st.title("⚙️ 控制面板")
     v_fav = st.checkbox("顯示組合追蹤", value=True)
     v_ai = st.checkbox("顯示 AI 預測與回測", value=True)
-    v_check = st.checkbox("顯示中獎檢查器", value=False)
-    v_chart = st.checkbox("顯示分析圖表", value=False)
+    v_check = st.checkbox("顯示中獎檢查器", value=True)
+    v_chart = st.checkbox("顯示分析圖表", value=True)
     st.divider()
     window = st.slider("預測參考窗口", 50, 500, 100)
 
 # --- 頁首資訊 ---
-latest = df_desc.iloc[0]
 st.title("🎰 六合彩 AI 專業分析器 Pro")
 c_m1, c_m2, c_m3 = st.columns(3)
 with c_m1: st.markdown(f"<div class='metric-card'><span class='stat-label'>最近日期</span><br><span class='stat-val'>{latest['date']}</span></div>", unsafe_allow_html=True)
@@ -190,70 +212,79 @@ if v_ai:
     st.write("---")
     st.markdown("<h3 class='section-header'>🔮 AI 智能預測與深度分析 (下期推薦)</h3>", unsafe_allow_html=True)
     
-    # 計算下期預測 (按機率得分排序)
-    next_ai_12 = calculate_ai_scores(df_asc, window_size=window)
+    # 下期預測 (12字)
+    next_ai_12, _ = calculate_ai_scores(df_asc, window_size=window, top_n=12)
+    # 下期預測 (35字)
+    next_ai_35, next_missing_14 = calculate_ai_scores(df_asc, window_size=window, top_n=35)
     
-    st.markdown("<div class='ai-box'>", unsafe_allow_html=True)
-    a_c1, a_c2 = st.columns([1, 1])
-    with a_c1:
+    a_tab1, a_tab2 = st.tabs(["🎯 12 字重點推薦", "廣 35 字高覆蓋推薦"])
+    
+    with a_tab1:
+        st.markdown("<div class='ai-box'>", unsafe_allow_html=True)
         st.markdown("#### 🎯 下期推薦 12 字 (按機率由高至低排序)")
         st.markdown(f"""<div style='background: linear-gradient(45deg, #FF6B35, #F7931E); padding: 25px; border-radius: 15px; text-align: center; color: white;'><h2 style='letter-spacing: 3px;'>{' '.join(map(str, next_ai_12[:6]))}<br>{' '.join(map(str, next_ai_12[6:]))}</h2></div>""", unsafe_allow_html=True)
-        st.caption("※ 左上方第一個數字為機率最高推薦號碼")
-    with a_c2:
-        st.markdown("#### 📊 預測邏輯")
-        st.write(f"1. **大數據機率**：分析最近 {window} 期號碼的頻率分佈與冷熱回歸趨勢。")
-        st.write(f"2. **得分排序**：針對每個號碼計算「潛在開出機率分數」，分數最高者排列在前。")
-        st.write(f"3. **歷史基準**：根據全期 {total_records} 筆數據進行動態加權。")
-    st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
-    # 歷史表現檢視 (100期)
-    st.markdown("<h3 class='section-header'>📈 AI 歷史表現深度檢視 (最近 100 期分析)</h3>", unsafe_allow_html=True)
-    backtest_data = get_historical_backtest(limit=100)
+    with a_tab2:
+        st.markdown("<div class='ai-box'>", unsafe_allow_html=True)
+        st.markdown("#### 🎯 下期推薦 35 字 (高覆蓋候選池)")
+        st.write(", ".join(map(str, next_ai_35)))
+        st.markdown("---")
+        st.markdown("#### ❌ AI 本期排除號碼 (14 字)")
+        st.write(", ".join(map(str, sorted(next_missing_14))))
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # 歷史表現檢視
+    st.markdown("<h3 class='section-header'>📈 AI 歷史表現深度檢視</h3>", unsafe_allow_html=True)
     
-    # 圖表統計
-    bt_df = pd.DataFrame(backtest_data)
-    dist_data = bt_df['match_count'].value_counts().sort_index()
+    tab_graph, tab_list_12, tab_list_35 = st.tabs(["📊 表現統計圖表", "📋 12 字回測清單", "📋 35 字高覆蓋回測"])
     
-    tab_graph, tab_list = st.tabs(["📊 表現統計圖表", "📋 詳細期數清單 (3行格式)"])
+    # 獲取數據
+    backtest_12 = get_historical_backtest(limit=100, top_n=12)
+    backtest_35 = get_historical_backtest(limit=100, top_n=35)
     
     with tab_graph:
+        bt_df = pd.DataFrame(backtest_12)
+        dist_data = bt_df['match_count'].value_counts().sort_index()
         g_c1, g_c2 = st.columns([1, 2])
         with g_c1:
-            st.markdown("#### 🎯 命中次數分佈")
-            fig_dist = px.bar(x=dist_data.index, y=dist_data.values, labels={'x': '命中字數', 'y': '期數'},
-                              color=dist_data.values, color_continuous_scale='Oranges', template="plotly_dark")
-            fig_dist.update_layout(showlegend=False, height=300)
-            st.plotly_chart(fig_dist, use_container_width=True)
+            st.markdown("#### 🎯 12字命中分佈")
+            st.plotly_chart(px.bar(x=dist_data.index, y=dist_data.values, color_continuous_scale='Oranges', template="plotly_dark"), use_container_width=True)
         with g_c2:
             st.markdown("#### 📈 命中趨勢走勢")
-            fig_trend = px.line(bt_df, x='date', y='match_count', labels={'date': '日期', 'match_count': '命中字數'},
-                                template="plotly_dark", markers=True)
-            fig_trend.update_traces(line_color='#FF6B35')
-            fig_trend.update_layout(height=300)
-            st.plotly_chart(fig_trend, use_container_width=True)
+            st.plotly_chart(px.line(bt_df, x='date', y='match_count', template="plotly_dark", markers=True), use_container_width=True)
 
-    with tab_list:
-        st.markdown('<div style="height: 600px; overflow-y: scroll; padding: 15px; border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; background: rgba(0,0,0,0.2);">', unsafe_allow_html=True)
-        for res in backtest_data:
+    with tab_list_12:
+        st.markdown('<div style="height: 600px; overflow-y: scroll; padding: 15px; border-radius: 10px; background: rgba(0,0,0,0.2);">', unsafe_allow_html=True)
+        for res in backtest_12:
             badge_color = "#FF6B35" if res['match_count'] >= 3 else "#444"
             st.markdown(f"""
             <div class="history-card" style="border-left: 5px solid {badge_color};">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <span style="font-size: 1.1em; font-weight: bold;">📅 開獎日期：{res['date']}</span>
-                    <span class="match-tag" style="background:{badge_color}; padding: 4px 12px;">中 {res['match_count']} 個字</span>
+                <div style="display: flex; justify-content: space-between;">
+                    <b>📅 日期：{res['date']}</b>
+                    <span class="match-tag" style="background:{badge_color}">命中 {res['match_count']} 個字</span>
                 </div>
-                <div style="margin-top: 10px; padding: 5px; border-bottom: 1px solid rgba(255,255,255,0.05);">
-                    <b style="color: #888;">第 1 行 (當期中獎數字)：</b> 
-                    <span style="color:#7FD1B9; font-weight: bold; font-size: 1.1em;">{" , ".join(map(str, res['draw_nums']))}</span> 
-                    <span style="color: #FF6B35;"> + 特別號: {res['extra']}</span>
+                <div style="margin-top: 10px;"><b>結果：</b> <span style="color:#7FD1B9">{" , ".join(map(str, res['draw_nums']))}</span> + ({res['extra']})</div>
+                <div><b>AI 12字：</b> {", ".join([f'<span style="color:{"#FF6B35" if n in res["matched_list"] else "#eee"}">{n}</span>' for n in res['prediction']])}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with tab_list_35:
+        st.markdown('<div style="height: 600px; overflow-y: scroll; padding: 15px; border-radius: 10px; background: rgba(0,0,0,0.2);">', unsafe_allow_html=True)
+        for res in backtest_35:
+            # 35 字命中 5 個以上算優秀
+            badge_color = "#7FD1B9" if res['match_count'] >= 6 else "#FF6B35" if res['match_count'] >= 4 else "#444"
+            st.markdown(f"""
+            <div class="history-card" style="border-left: 5px solid {badge_color};">
+                <div style="display: flex; justify-content: space-between;">
+                    <b>📅 日期：{res['date']}</b>
+                    <span class="match-tag" style="background:{badge_color}">命中 {res['match_count']} 個字</span>
                 </div>
-                <div style="margin-top: 5px; padding: 5px; border-bottom: 1px solid rgba(255,255,255,0.05);">
-                    <b style="color: #888;">第 2 行 (AI 預測數字 - 按機率排序)：</b> 
-                    {", ".join([f'<span style="color:{"#FF6B35" if n in res["matched_list"] else "#eee"}; font-weight:{"bold" if n in res["matched_list"] else "normal"}">{n}</span>' for n in res['prediction']])}
-                </div>
-                <div style="margin-top: 5px; padding: 5px; color: #FF6B35;">
-                    <b>第 3 行 (分析結果)：</b> 本期 AI 成功預測命中 <span style="font-size: 1.2em; font-weight: bold;">{res['match_count']}</span> 個字。
-                </div>
+                <div style="margin-top: 10px;"><b>第 1 行 (AI 預測 35 字)：</b> <small style="color:#bbb;">{", ".join(map(str, res['prediction']))}</small></div>
+                <div style="margin-top: 5px;"><b>第 2 行 (AI 未預測 14 字)：</b> <small class="missing-tag">{" , ".join(map(str, res['missing']))}</small></div>
+                <div style="margin-top: 5px;"><b>第 3 行 (該期結果)：</b> <span style="color:#7FD1B9">{" , ".join(map(str, res['draw_nums']))}</span> + ({res['extra']})</div>
+                <div style="margin-top: 5px; color: #FF6B35;"><b>🎯 分析結果：</b> 命中 <b>{res['match_count']}</b> 個號碼。</div>
             </div>
             """, unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
@@ -266,7 +297,7 @@ if v_check:
     for i in range(1, 50):
         with g_cols[(i-1)%7]:
             is_s = i in st.session_state.selected_nums
-            if st.button(f"{i:02d}", key=f"grid_{i}", width='stretch', type="primary" if is_s else "secondary"):
+            if st.button(f"{i:02d}", key=f"grid_{i}", use_container_width=True, type="primary" if is_s else "secondary"):
                 if is_s: st.session_state.selected_nums.remove(i)
                 elif len(st.session_state.selected_nums) < 6: st.session_state.selected_nums.add(i)
                 st.rerun()
@@ -275,7 +306,7 @@ if v_check:
         h_res = get_all_historical_wins_fast(tuple(sl), total_records)
         if h_res:
             st.success(f"🎉 歷史共中獎 {len(h_res)} 次")
-            st.dataframe(pd.DataFrame(h_res).sort_values("Rank"), width='stretch', hide_index=True)
+            st.dataframe(pd.DataFrame(h_res).sort_values("Rank"), use_container_width=True, hide_index=True)
         else: st.info("此組合在歷史中未曾獲獎。")
 
 # --- 4. 圖表分析 ---
