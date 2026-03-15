@@ -214,10 +214,10 @@ if v_ai:
     
     # 下期預測 (12字)
     next_ai_12, _ = calculate_ai_scores(df_asc, window_size=window, top_n=12)
-    # 下期預測 (40字)
-    next_ai_40, next_missing_9 = calculate_ai_scores(df_asc, window_size=window, top_n=40)
+    # 下期預測 (44字)
+    next_ai_44, next_missing_5 = calculate_ai_scores(df_asc, window_size=window, top_n=44)
     
-    a_tab1, a_tab2 = st.tabs(["🎯 12 字重點推薦", "廣 40 字高覆蓋推薦"])
+    a_tab1, a_tab2 = st.tabs(["🎯 12 字重點推薦", "廣 44 字高覆蓋推薦"])
     
     with a_tab1:
         st.markdown("<div class='ai-box'>", unsafe_allow_html=True)
@@ -227,21 +227,21 @@ if v_ai:
 
     with a_tab2:
         st.markdown("<div class='ai-box'>", unsafe_allow_html=True)
-        st.markdown("#### 🎯 下期推薦 40 字 (高覆蓋候選池)")
-        st.write(", ".join(map(str, next_ai_40)))
+        st.markdown("#### 🎯 下期推薦 44 字 (高覆蓋候選池)")
+        st.write(", ".join(map(str, next_ai_44)))
         st.markdown("---")
-        st.markdown("#### ❌ AI 本期排除號碼 (9 字)")
-        st.write(", ".join(map(str, sorted(next_missing_9))))
+        st.markdown("#### ❌ AI 本期排除號碼 (5 字)")
+        st.write(", ".join(map(str, sorted(next_missing_5))))
         st.markdown("</div>", unsafe_allow_html=True)
 
     # 歷史表現檢視
     st.markdown("<h3 class='section-header'>📈 AI 歷史表現深度檢視</h3>", unsafe_allow_html=True)
     
-    tab_graph, tab_list_12, tab_list_40 = st.tabs(["📊 表現統計圖表", "📋 12 字回測清單", "📋 40 字高覆蓋回測"])
+    tab_graph, tab_list_12, tab_list_44 = st.tabs(["📊 表現統計圖表", "📋 12 字回測清單", "📋 44 字高覆蓋回測"])
     
     # 獲取數據
     backtest_12 = get_historical_backtest(limit=100, top_n=12)
-    backtest_40 = get_historical_backtest(limit=100, top_n=40)
+    backtest_44 = get_historical_backtest(limit=100, top_n=44)
     
     with tab_graph:
         bt_df = pd.DataFrame(backtest_12)
@@ -270,19 +270,19 @@ if v_ai:
             """, unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    with tab_list_40:
+    with tab_list_44:
         st.markdown('<div style="height: 600px; overflow-y: scroll; padding: 15px; border-radius: 10px; background: rgba(0,0,0,0.2);">', unsafe_allow_html=True)
-        for res in backtest_40:
-            # 40 字命中 6 個以上才算正常
-            badge_color = "#7FD1B9" if res['match_count'] >= 7 else "#FF6B35" if res['match_count'] >= 5 else "#444"
+        for res in backtest_44:
+            # 44 字命中要求更高，7 個全中才算完美
+            badge_color = "#7FD1B9" if res['match_count'] >= 7 else "#FF6B35" if res['match_count'] >= 6 else "#444"
             st.markdown(f"""
             <div class="history-card" style="border-left: 5px solid {badge_color};">
                 <div style="display: flex; justify-content: space-between;">
                     <b>📅 日期：{res['date']}</b>
                     <span class="match-tag" style="background:{badge_color}">命中 {res['match_count']} 個字</span>
                 </div>
-                <div style="margin-top: 10px;"><b>第 1 行 (AI 預測 40 字)：</b> <small style="color:#bbb;">{", ".join(map(str, res['prediction']))}</small></div>
-                <div style="margin-top: 5px;"><b>第 2 行 (AI 未預測 9 字)：</b> <small class="missing-tag">{" , ".join(map(str, res['missing']))}</small></div>
+                <div style="margin-top: 10px;"><b>第 1 行 (AI 預測 44 字)：</b> <small style="color:#bbb;">{", ".join(map(str, res['prediction']))}</small></div>
+                <div style="margin-top: 5px;"><b>第 2 行 (AI 未預測 5 字)：</b> <small class="missing-tag">{" , ".join(map(str, res['missing']))}</small></div>
                 <div style="margin-top: 5px;"><b>第 3 行 (該期結果)：</b> <span style="color:#7FD1B9">{" , ".join(map(str, res['draw_nums']))}</span> + ({res['extra']})</div>
                 <div style="margin-top: 5px; color: #FF6B35;"><b>🎯 分析結果：</b> 命中 <b>{res['match_count']}</b> 個號碼。</div>
             </div>
