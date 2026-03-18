@@ -48,7 +48,7 @@ FIXED_FAV_SETS = [
 ]
 
 # --- 核心數據邏輯 ---
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=600) # 縮短緩存至 10 分鐘，確保數據同步
 def load_data():
     """載入數據並執行基本的清理，確保數值正確並防禦損壞數據"""
     if not os.path.exists('marksix.csv'):
@@ -56,16 +56,18 @@ def load_data():
         
     df = pd.read_csv('marksix.csv')
     
-    # 數據過濾：確保日期格式正確且號碼列為有效數字
+    # 數據過濾：確保日期格式正常（排除掉之前抓錯的長數字串）
     df = df[df['date'].astype(str).str.len() <= 12] 
+    
     num_cols_all = ['n1', 'n2', 'n3', 'n4', 'n5', 'n6', 'extra']
     for col in num_cols_all:
         df[col] = pd.to_numeric(df[col], errors='coerce')
     
     df = df.dropna(subset=num_cols_all)
+    # 確保號碼在 1-49 之間
     df = df[df[num_cols_all].apply(lambda x: x.between(1, 49)).all(axis=1)]
     
-    # 轉換日期
+    # 轉換日期並排序 (舊到新)
     df['date_parsed'] = pd.to_datetime(df['date'], format='mixed')
     df = df.sort_values('date_parsed', ascending=True).reset_index(drop=True)
     
@@ -87,9 +89,11 @@ def calculate_ai_scores(historical_df, window_size=100, top_n=12):
     total_draws = len(recent_data)
     
     for n in range(1, 50):
+        # 1. 頻率權重 (佔 60%)
         freq = counts.get(n, 0)
         freq_score = (freq / (total_draws * 6 / 49 + 0.001)) * 60 
         
+        # 2. 遺漏權重 (佔 40%)
         last_appearance = 0
         for i, draw in enumerate(reversed(recent_data[['n1', 'n2', 'n3', 'n4', 'n5', 'n6']].values)):
             if n in draw:
@@ -103,21 +107,23 @@ def calculate_ai_scores(historical_df, window_size=100, top_n=12):
     remaining_list = [int(x[0]) for x in ranked_nums[top_n:]]
     return top_list, remaining_list
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False) # 重要：必須加上 TTL 否則不會更新最新數據的回測
 def get_historical_backtest(limit=100, top_n=12):
     """回測最近期的 AI 表現"""
     df_asc, draws_np, extras_np, dates_np = load_data()
     results = []
     if df_asc.empty: return []
     total = len(df_asc)
+    # 確保回測至少有足夠數據背景
     start_idx = max(50, total - limit)
     
     for i in range(total - 1, start_idx - 1, -1):
+        # 模擬「開獎前」的數據狀態
         past_df = df_asc.iloc[:i]
         target_draw = set(draws_np[i])
         target_extra = int(extras_np[i])
         
-        # AI 預測
+        # 執行當時機率預測
         ai_top, ai_remain = calculate_ai_scores(past_df, window_size=100, top_n=top_n)
         
         draw_all = list(target_draw) + [target_extra]
@@ -165,7 +171,7 @@ try:
         num_cols = ['n1', 'n2', 'n3', 'n4', 'n5', 'n6']
         latest = df_desc.iloc[0]
     else:
-        st.warning("尚未偵測到 marksix.csv 數據。")
+        st.warning("數據更新中或 marksix.csv 損壞，請檢查數據庫。")
         st.stop()
 except Exception as e:
     st.error(f"數據載入出錯: {e}"); st.stop()
@@ -181,6 +187,9 @@ with st.sidebar:
     v_chart = st.checkbox("顯示分析圖表", value=True)
     st.divider()
     window = st.slider("預測參考窗口", 50, 500, 100)
+    if st.button("🔄 手動刷新緩存"):
+        st.cache_data.clear()
+        st.rerun()
 
 # --- 頁首資訊 ---
 st.title("🎰 六合彩 AI 專業分析器 Pro")
@@ -212,9 +221,8 @@ if v_ai:
     st.write("---")
     st.markdown("<h3 class='section-header'>🔮 AI 智能預測與深度分析 (下期推薦)</h3>", unsafe_allow_html=True)
     
-    # 下期預測 (12字)
+    # 下期預測
     next_ai_12, _ = calculate_ai_scores(df_asc, window_size=window, top_n=12)
-    # 下期預測 (44字)
     next_ai_44, next_missing_5 = calculate_ai_scores(df_asc, window_size=window, top_n=44)
     
     a_tab1, a_tab2 = st.tabs(["🎯 12 字重點推薦", "廣 44 字高覆蓋推薦"])
@@ -239,7 +247,7 @@ if v_ai:
     
     tab_graph, tab_list_12, tab_list_44 = st.tabs(["📊 表現統計圖表", "📋 12 字回測清單", "📋 44 字高覆蓋回測"])
     
-    # 獲取數據
+    # 獲取回測數據 (確保兩邊都使用最新的數據)
     backtest_12 = get_historical_backtest(limit=100, top_n=12)
     backtest_44 = get_historical_backtest(limit=100, top_n=44)
     
@@ -261,7 +269,7 @@ if v_ai:
             st.markdown(f"""
             <div class="history-card" style="border-left: 5px solid {badge_color};">
                 <div style="display: flex; justify-content: space-between;">
-                    <b>📅 日期：{res['date']}</b>
+                    <b>📅 開獎日期：{res['date']}</b>
                     <span class="match-tag" style="background:{badge_color}">命中 {res['match_count']} 個字</span>
                 </div>
                 <div style="margin-top: 10px;"><b>結果：</b> <span style="color:#7FD1B9">{" , ".join(map(str, res['draw_nums']))}</span> + ({res['extra']})</div>
@@ -273,12 +281,11 @@ if v_ai:
     with tab_list_44:
         st.markdown('<div style="height: 600px; overflow-y: scroll; padding: 15px; border-radius: 10px; background: rgba(0,0,0,0.2);">', unsafe_allow_html=True)
         for res in backtest_44:
-            # 44 字命中要求更高，7 個全中才算完美
             badge_color = "#7FD1B9" if res['match_count'] >= 7 else "#FF6B35" if res['match_count'] >= 6 else "#444"
             st.markdown(f"""
             <div class="history-card" style="border-left: 5px solid {badge_color};">
                 <div style="display: flex; justify-content: space-between;">
-                    <b>📅 日期：{res['date']}</b>
+                    <b>📅 開獎日期：{res['date']}</b>
                     <span class="match-tag" style="background:{badge_color}">命中 {res['match_count']} 個字</span>
                 </div>
                 <div style="margin-top: 10px;"><b>第 1 行 (AI 預測 44 字)：</b> <small style="color:#bbb;">{", ".join(map(str, res['prediction']))}</small></div>
