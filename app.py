@@ -250,6 +250,12 @@ if v_ai:
         with c1:
             st.markdown("##### 核心 12 字 → 2 字一組 (共 66 組)")
             comb_12_2 = list(itertools.combinations(sorted(next_ai_12), 2))
+            
+            # 提供 12選2 下載
+            df_comb_12 = pd.DataFrame(comb_12_2, columns=['碼1', '碼2'])
+            csv_comb_12 = df_comb_12.to_csv(index=False).encode('utf-8-sig')
+            st.download_button(label="📥 下載核心 66 組組合 (CSV)", data=csv_comb_12, file_name=f"marksix_12_select_2_{datetime.date.today()}.csv", mime="text/csv")
+            
             comb_text_12 = ""
             for i, combo in enumerate(comb_12_2):
                 comb_text_12 += f"[{i+1:02d}] {combo[0]:02d}, {combo[1]:02d}    "
@@ -260,10 +266,10 @@ if v_ai:
             st.markdown("##### 次選 32 字 → 3 字一組 (共 4,960 組)")
             comb_32_3 = list(itertools.combinations(sorted(next_remaining_32), 3))
             
-            # 提供下載
+            # 提供 32選3 下載
             df_comb_32 = pd.DataFrame(comb_32_3, columns=['碼1', '碼2', '碼3'])
-            csv_comb = df_comb_32.to_csv(index=False).encode('utf-8-sig')
-            st.download_button(label="📥 下載完整 4,960 組組合 (CSV)", data=csv_comb, file_name=f"marksix_32_select_3_{datetime.date.today()}.csv", mime="text/csv")
+            csv_comb_32 = df_comb_32.to_csv(index=False).encode('utf-8-sig')
+            st.download_button(label="📥 下載次選 4,960 組組合 (CSV)", data=csv_comb_32, file_name=f"marksix_32_select_3_{datetime.date.today()}.csv", mime="text/csv")
             
             # 列出所有組合
             comb_text_32 = ""
