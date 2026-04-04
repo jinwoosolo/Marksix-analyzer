@@ -37,6 +37,8 @@ st.markdown("""
     .history-card { background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.05); padding: 15px; border-radius: 10px; margin-bottom: 10px; }
     .match-tag { background: #FF6B35; color: white; padding: 2px 8px; border-radius: 4px; font-weight: bold; }
     .missing-tag { background: #444; color: #aaa; padding: 2px 8px; border-radius: 4px; font-size: 0.9em; }
+    .number-tag { display: inline-block; background: rgba(255, 107, 53, 0.1); border: 1px solid rgba(255, 107, 53, 0.2); padding: 2px 8px; margin: 2px; border-radius: 5px; color: #eee; font-family: monospace; }
+    .excluded-tag { display: inline-block; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); padding: 2px 8px; margin: 2px; border-radius: 5px; color: #666; font-family: monospace; text-decoration: line-through; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -48,29 +50,21 @@ FIXED_FAV_SETS = [
 ]
 
 # --- 核心數據邏輯 ---
-@st.cache_data(ttl=600) # 縮短緩存至 10 分鐘，確保數據同步
+@st.cache_data(ttl=600)
 def load_data():
     """載入數據並執行基本的清理，確保數值正確並防禦損壞數據"""
     if not os.path.exists('marksix.csv'):
         return pd.DataFrame(), np.array([]), np.array([]), np.array([])
         
     df = pd.read_csv('marksix.csv')
-    
-    # 數據過濾：確保日期格式正常（排除掉之前抓錯的長數字串）
     df = df[df['date'].astype(str).str.len() <= 12] 
-    
     num_cols_all = ['n1', 'n2', 'n3', 'n4', 'n5', 'n6', 'extra']
     for col in num_cols_all:
         df[col] = pd.to_numeric(df[col], errors='coerce')
-    
     df = df.dropna(subset=num_cols_all)
-    # 確保號碼在 1-49 之間
     df = df[df[num_cols_all].apply(lambda x: x.between(1, 49)).all(axis=1)]
-    
-    # 轉換日期並排序 (舊到新)
     df['date_parsed'] = pd.to_datetime(df['date'], format='mixed')
     df = df.sort_values('date_parsed', ascending=True).reset_index(drop=True)
-    
     draws_matrix = df[['n1', 'n2', 'n3', 'n4', 'n5', 'n6']].values
     extras_array = df['extra'].values
     dates_array = df['date'].values
@@ -89,11 +83,8 @@ def calculate_ai_scores(historical_df, window_size=100, top_n=12):
     total_draws = len(recent_data)
     
     for n in range(1, 50):
-        # 1. 頻率權重 (佔 60%)
         freq = counts.get(n, 0)
         freq_score = (freq / (total_draws * 6 / 49 + 0.001)) * 60 
-        
-        # 2. 遺漏權重 (佔 40%)
         last_appearance = 0
         for i, draw in enumerate(reversed(recent_data[['n1', 'n2', 'n3', 'n4', 'n5', 'n6']].values)):
             if n in draw:
@@ -107,25 +98,20 @@ def calculate_ai_scores(historical_df, window_size=100, top_n=12):
     remaining_list = [int(x[0]) for x in ranked_nums[top_n:]]
     return top_list, remaining_list
 
-@st.cache_data(ttl=600, show_spinner=False) # 重要：必須加上 TTL 否則不會更新最新數據的回測
+@st.cache_data(ttl=600, show_spinner=False)
 def get_historical_backtest(limit=100, top_n=12):
     """回測最近期的 AI 表現"""
     df_asc, draws_np, extras_np, dates_np = load_data()
     results = []
     if df_asc.empty: return []
     total = len(df_asc)
-    # 確保回測至少有足夠數據背景
     start_idx = max(50, total - limit)
     
     for i in range(total - 1, start_idx - 1, -1):
-        # 模擬「開獎前」的數據狀態
         past_df = df_asc.iloc[:i]
         target_draw = set(draws_np[i])
         target_extra = int(extras_np[i])
-        
-        # 執行當時機率預測
         ai_top, ai_remain = calculate_ai_scores(past_df, window_size=100, top_n=top_n)
-        
         draw_all = list(target_draw) + [target_extra]
         matched_nums = [n for n in ai_top if n in draw_all]
         match_count = len(matched_nums)
@@ -221,11 +207,15 @@ if v_ai:
     st.write("---")
     st.markdown("<h3 class='section-header'>🔮 AI 智能預測與深度分析 (下期推薦)</h3>", unsafe_allow_html=True)
     
-    # 下期預測
+    # 計算下期預測數據
+    # 1. 12字重點
     next_ai_12, _ = calculate_ai_scores(df_asc, window_size=window, top_n=12)
-    next_ai_44, next_missing_5 = calculate_ai_scores(df_asc, window_size=window, top_n=44)
+    # 2. 44字高覆蓋 (用於找出排除的5個字)
+    next_ai_44, next_excluded_5 = calculate_ai_scores(df_asc, window_size=window, top_n=44)
+    # 3. 找出餘下的數字 (即是在 44 個內但不在前 12 個內的 32 個數字)
+    next_remaining_32 = [n for n in next_ai_44 if n not in next_ai_12]
     
-    a_tab1, a_tab2 = st.tabs(["🎯 12 字重點推薦", "廣 44 字高覆蓋推薦"])
+    a_tab1, a_tab2, a_tab3 = st.tabs(["🎯 12 字重點推薦", "廣 44 字高覆蓋推薦", "📊 下期預測完整清單"])
     
     with a_tab1:
         st.markdown("<div class='ai-box'>", unsafe_allow_html=True)
@@ -239,28 +229,44 @@ if v_ai:
         st.write(", ".join(map(str, next_ai_44)))
         st.markdown("---")
         st.markdown("#### ❌ AI 本期排除號碼 (5 字)")
-        st.write(", ".join(map(str, sorted(next_missing_5))))
+        st.write(", ".join(map(str, sorted(next_excluded_5))))
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with a_tab3:
+        st.markdown("<div class='ai-box'>", unsafe_allow_html=True)
+        st.markdown("#### 📊 下期預測全數據分類")
+        
+        st.markdown("##### 1. 核心推薦 (12個字)")
+        cols1 = st.columns(1)
+        st.markdown(" ".join([f"<span class='number-tag' style='border-color:#FF6B35; color:#FF6B35;'>{n}</span>" for n in next_ai_12]), unsafe_allow_html=True)
+        
+        st.markdown("##### 2. 次選及後備 (32個字)")
+        st.markdown(" ".join([f"<span class='number-tag'>{n}</span>" for n in next_remaining_32]), unsafe_allow_html=True)
+        
+        st.markdown("##### 3. AI 排除/極低機會 (5個字)")
+        st.markdown(" ".join([f"<span class='excluded-tag'>{n}</span>" for n in sorted(next_excluded_5)]), unsafe_allow_html=True)
+        
+        st.caption("※ 核心推薦號碼按預測得分排序，排除號碼為當前模型認為開出機率最低的數字。")
         st.markdown("</div>", unsafe_allow_html=True)
 
     # 歷史表現檢視
     st.markdown("<h3 class='section-header'>📈 AI 歷史表現深度檢視</h3>", unsafe_allow_html=True)
-    
     tab_graph, tab_list_12, tab_list_44 = st.tabs(["📊 表現統計圖表", "📋 12 字回測清單", "📋 44 字高覆蓋回測"])
     
-    # 獲取回測數據 (確保兩邊都使用最新的數據)
     backtest_12 = get_historical_backtest(limit=100, top_n=12)
     backtest_44 = get_historical_backtest(limit=100, top_n=44)
     
     with tab_graph:
-        bt_df = pd.DataFrame(backtest_12)
-        dist_data = bt_df['match_count'].value_counts().sort_index()
-        g_c1, g_c2 = st.columns([1, 2])
-        with g_c1:
-            st.markdown("#### 🎯 12字命中分佈")
-            st.plotly_chart(px.bar(x=dist_data.index, y=dist_data.values, color_continuous_scale='Oranges', template="plotly_dark"), use_container_width=True)
-        with g_c2:
-            st.markdown("#### 📈 命中趨勢走勢")
-            st.plotly_chart(px.line(bt_df, x='date', y='match_count', template="plotly_dark", markers=True), use_container_width=True)
+        if backtest_12:
+            bt_df = pd.DataFrame(backtest_12)
+            dist_data = bt_df['match_count'].value_counts().sort_index()
+            g_c1, g_c2 = st.columns([1, 2])
+            with g_c1:
+                st.markdown("#### 🎯 12字命中分佈")
+                st.plotly_chart(px.bar(x=dist_data.index, y=dist_data.values, color_continuous_scale='Oranges', template="plotly_dark"), use_container_width=True)
+            with g_c2:
+                st.markdown("#### 📈 命中趨勢走勢")
+                st.plotly_chart(px.line(bt_df, x='date', y='match_count', template="plotly_dark", markers=True), use_container_width=True)
 
     with tab_list_12:
         st.markdown('<div style="height: 600px; overflow-y: scroll; padding: 15px; border-radius: 10px; background: rgba(0,0,0,0.2);">', unsafe_allow_html=True)
