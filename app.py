@@ -54,7 +54,7 @@ FIXED_FAV_SETS = [
 # --- 核心數據邏輯 ---
 @st.cache_data(ttl=600)
 def load_data():
-    """載入數據並執行基本的清理，確保數值正確並防禦損壞數據"""
+    """載入數據並執行基本的清理"""
     if not os.path.exists('marksix.csv'):
         return pd.DataFrame(), np.array([]), np.array([]), np.array([])
         
@@ -72,9 +72,13 @@ def load_data():
     dates_array = df['date'].values
     return df, draws_matrix, extras_array, dates_array
 
-def calculate_ai_scores(historical_df, window_size=100, top_n=12):
-    """根據頻率與遺漏值計算號碼綜合機率得分，並返回前 N 個號碼及其餘號碼"""
-    recent_data = historical_df.tail(window_size)
+def calculate_ai_scores(historical_df, window_size=None, top_n=12):
+    """根據頻率與遺漏值計算號碼得分，window_size 為 None 時使用全部數據"""
+    if window_size and window_size < len(historical_df):
+        recent_data = historical_df.tail(window_size)
+    else:
+        recent_data = historical_df
+
     if recent_data.empty:
         full_list = list(range(1, 50))
         return full_list[:top_n], full_list[top_n:]
@@ -84,15 +88,22 @@ def calculate_ai_scores(historical_df, window_size=100, top_n=12):
     scores = {}
     total_draws = len(recent_data)
     
+    # 獲取最近的數據矩陣用於計算遺漏值
+    draws_np = recent_data[['n1', 'n2', 'n3', 'n4', 'n5', 'n6']].values
+    
     for n in range(1, 50):
+        # 1. 頻率權重 (佔 60%) - 基於所選窗口的出現率
         freq = counts.get(n, 0)
         freq_score = (freq / (total_draws * 6 / 49 + 0.001)) * 60 
+        
+        # 2. 遺漏權重 (佔 40%) - 越久沒開代表回歸機率調整
         last_appearance = 0
-        for i, draw in enumerate(reversed(recent_data[['n1', 'n2', 'n3', 'n4', 'n5', 'n6']].values)):
+        for i, draw in enumerate(reversed(draws_np)):
             if n in draw:
                 last_appearance = i
                 break
         gap_score = (last_appearance / 20) * 40
+        
         scores[n] = freq_score + gap_score
         
     ranked_nums = sorted(scores.items(), key=lambda x: x[1], reverse=True)
@@ -101,8 +112,8 @@ def calculate_ai_scores(historical_df, window_size=100, top_n=12):
     return top_list, remaining_list
 
 @st.cache_data(ttl=600, show_spinner=False)
-def get_historical_backtest(limit=100, top_n=12):
-    """回測最近期的 AI 表現"""
+def get_historical_backtest(data_len, window_size, limit=100, top_n=12):
+    """回測最近期的 AI 表現，window_size 傳入 None 則模擬全量數據參考"""
     df_asc, draws_np, extras_np, dates_np = load_data()
     results = []
     if df_asc.empty: return []
@@ -110,10 +121,14 @@ def get_historical_backtest(limit=100, top_n=12):
     start_idx = max(50, total - limit)
     
     for i in range(total - 1, start_idx - 1, -1):
+        # 模擬當時預測：只看該期之前的數據
         past_df = df_asc.iloc[:i]
         target_draw = set(draws_np[i])
         target_extra = int(extras_np[i])
-        ai_top, ai_remain = calculate_ai_scores(past_df, window_size=100, top_n=top_n)
+        
+        # 執行當時預測
+        ai_top, ai_remain = calculate_ai_scores(past_df, window_size=window_size, top_n=top_n)
+        
         draw_all = list(target_draw) + [target_extra]
         matched_nums = [n for n in ai_top if n in draw_all]
         match_count = len(matched_nums)
@@ -174,7 +189,15 @@ with st.sidebar:
     v_check = st.checkbox("顯示中獎檢查器", value=True)
     v_chart = st.checkbox("顯示分析圖表", value=True)
     st.divider()
-    window = st.slider("預測參考窗口", 50, 500, 100)
+    
+    st.write("📈 **AI 預測設定**")
+    use_all_data = st.checkbox("使用全部歷史數據 (All Records)", value=True)
+    if use_all_data:
+        current_window = None
+        st.info(f"當前參考：全部 {total_records} 期數據")
+    else:
+        current_window = st.slider("預測參考窗口 (最近期數)", 50, min(total_records, 1000), 100)
+    
     if st.button("🔄 手動刷新緩存"):
         st.cache_data.clear()
         st.rerun()
@@ -209,8 +232,9 @@ if v_ai:
     st.write("---")
     st.markdown("<h3 class='section-header'>🔮 AI 智能預測與深度分析 (下期推薦)</h3>", unsafe_allow_html=True)
     
-    next_ai_12, _ = calculate_ai_scores(df_asc, window_size=window, top_n=12)
-    next_ai_44, next_excluded_5 = calculate_ai_scores(df_asc, window_size=window, top_n=44)
+    # 計算下期預測數據
+    next_ai_12, _ = calculate_ai_scores(df_asc, window_size=current_window, top_n=12)
+    next_ai_44, next_excluded_5 = calculate_ai_scores(df_asc, window_size=current_window, top_n=44)
     next_remaining_32 = [n for n in next_ai_44 if n not in next_ai_12]
     
     a_tab1, a_tab2, a_tab3, a_tab4 = st.tabs(["🎯 12 字重點推薦", "廣 44 字高覆蓋推薦", "📊 下期預測完整清單", "🧩 組合拆解分析"])
@@ -244,49 +268,36 @@ if v_ai:
     with a_tab4:
         st.markdown("<div class='ai-box'>", unsafe_allow_html=True)
         st.markdown("#### 🧩 推薦號碼自動組合拆解 (完整清單)")
-        
         c1, c2 = st.columns(2)
-        
         with c1:
             st.markdown("##### 核心 12 字 → 2 字一組 (共 66 組)")
             comb_12_2 = list(itertools.combinations(sorted(next_ai_12), 2))
-            
-            # 提供 12選2 下載
             df_comb_12 = pd.DataFrame(comb_12_2, columns=['碼1', '碼2'])
-            csv_comb_12 = df_comb_12.to_csv(index=False).encode('utf-8-sig')
-            st.download_button(label="📥 下載核心 66 組組合 (CSV)", data=csv_comb_12, file_name=f"marksix_12_select_2_{datetime.date.today()}.csv", mime="text/csv")
-            
+            st.download_button(label="📥 下載核心 66 組組合 (CSV)", data=df_comb_12.to_csv(index=False).encode('utf-8-sig'), file_name=f"marksix_12_select_2_{datetime.date.today()}.csv", mime="text/csv")
             comb_text_12 = ""
             for i, combo in enumerate(comb_12_2):
                 comb_text_12 += f"[{i+1:02d}] {combo[0]:02d}, {combo[1]:02d}    "
                 if (i+1) % 2 == 0: comb_text_12 += "\n"
             st.markdown(f"<div class='comb-box'>{comb_text_12}</div>", unsafe_allow_html=True)
-            
         with c2:
             st.markdown("##### 次選 32 字 → 3 字一組 (共 4,960 組)")
             comb_32_3 = list(itertools.combinations(sorted(next_remaining_32), 3))
-            
-            # 提供 32選3 下載
             df_comb_32 = pd.DataFrame(comb_32_3, columns=['碼1', '碼2', '碼3'])
-            csv_comb_32 = df_comb_32.to_csv(index=False).encode('utf-8-sig')
-            st.download_button(label="📥 下載次選 4,960 組組合 (CSV)", data=csv_comb_32, file_name=f"marksix_32_select_3_{datetime.date.today()}.csv", mime="text/csv")
-            
-            # 列出所有組合
+            st.download_button(label="📥 下載次選 4,960 組組合 (CSV)", data=df_comb_32.to_csv(index=False).encode('utf-8-sig'), file_name=f"marksix_32_select_3_{datetime.date.today()}.csv", mime="text/csv")
             comb_text_32 = ""
             for i, combo in enumerate(comb_32_3):
                 comb_text_32 += f"{combo[0]:02d},{combo[1]:02d},{combo[2]:02d} | "
                 if (i+1) % 4 == 0: comb_text_32 += "\n"
-            
             st.markdown(f"<div class='comb-box'>{comb_text_32}</div>", unsafe_allow_html=True)
-            
         st.markdown("</div>", unsafe_allow_html=True)
 
     # 歷史表現檢視
     st.markdown("<h3 class='section-header'>📈 AI 歷史表現深度檢視</h3>", unsafe_allow_html=True)
     tab_graph, tab_list_12, tab_list_44 = st.tabs(["📊 表現統計圖表", "📋 12 字回測清單", "📋 44 字高覆蓋回測"])
     
-    backtest_12 = get_historical_backtest(limit=100, top_n=12)
-    backtest_44 = get_historical_backtest(limit=100, top_n=44)
+    # 獲取回測數據
+    backtest_12 = get_historical_backtest(total_records, current_window, limit=100, top_n=12)
+    backtest_44 = get_historical_backtest(total_records, current_window, limit=100, top_n=44)
     
     with tab_graph:
         if backtest_12:
@@ -294,7 +305,7 @@ if v_ai:
             dist_data = bt_df['match_count'].value_counts().sort_index()
             g_c1, g_c2 = st.columns([1, 2])
             with g_c1:
-                st.plotly_chart(px.bar(x=dist_data.index, y=dist_data.values, color_continuous_scale='Oranges', template="plotly_dark"), use_container_width=True)
+                st.plotly_chart(px.bar(x=dist_data.index, y=dist_data.values, color_continuous_scale='Oranges', template="plotly_dark", labels={'x':'命中數','y':'期數'}), use_container_width=True)
             with g_c2:
                 st.plotly_chart(px.line(bt_df, x='date', y='match_count', template="plotly_dark", markers=True), use_container_width=True)
 
@@ -337,8 +348,10 @@ if v_chart:
     st.write("---")
     t1, t2 = st.tabs(["📊 出字頻率", "📈 總和趨勢"])
     with t1:
-        fq_df = pd.DataFrame(Counter(df_desc.head(window)[num_cols].values.flatten()).items(), columns=['No','Count']).sort_values('Count', ascending=False)
+        # 這裡會根據 current_window 自動調整圖表顯示的統計範圍
+        ref_df = df_desc if current_window is None else df_desc.head(current_window)
+        fq_df = pd.DataFrame(Counter(ref_df[num_cols].values.flatten()).items(), columns=['No','Count']).sort_values('Count', ascending=False)
         st.plotly_chart(px.bar(fq_df.head(25), x='No', y='Count', color='Count', color_continuous_scale='Oranges', template="plotly_dark"), use_container_width=True)
     with t2:
         df_desc['draw_sum'] = df_desc[num_cols].sum(axis=1)
-        st.plotly_chart(px.area(df_desc.head(window), x='date_parsed', y='draw_sum', template="plotly_dark", color_discrete_sequence=['#FF6B35']), use_container_width=True)
+        st.plotly_chart(px.area(df_desc.head(current_window or 500), x='date_parsed', y='draw_sum', template="plotly_dark", color_discrete_sequence=['#FF6B35']), use_container_width=True)
